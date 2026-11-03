@@ -41,11 +41,11 @@ describe('defaults', () => {
 				fetch: () => {
 					calls++
 					return Promise.resolve(
-						calls === 1 ? jsonResponse({}, 503) : jsonResponse({ ok: true })
+						calls === 1 ? jsonResponse({}, 503) : jsonResponse({ ok: true }),
 					)
 				},
 			}),
-			{ retry: { baseDelay: 1, jitter: false } }
+			{ retry: { baseDelay: 1, jitter: false } },
 		)
 
 		await expect(api.get('/x')).resolves.toEqual({ ok: true })
@@ -61,7 +61,7 @@ describe('defaults', () => {
 					return Promise.resolve(jsonResponse({}, 503))
 				},
 			}),
-			{ retry: false }
+			{ retry: false },
 		)
 
 		await api.get('/x').safe()
@@ -76,7 +76,7 @@ describe('defaults', () => {
 			{
 				session: { adapter: { load: async () => null }, onUnauthenticated },
 				retry: { baseDelay: 1 },
-			}
+			},
 		)
 
 		await api.get('/x').safe()

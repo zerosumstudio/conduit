@@ -194,7 +194,7 @@ export function queue(config: QueueConfig = {}): Plugin<QueueApi> {
 						? waiting.length
 						: waiting.reduce(
 								(count, waiter) => count + (waiter.lane === lane ? 1 : 0),
-								0
+								0,
 							),
 				activeRequests: (): number => active,
 			}

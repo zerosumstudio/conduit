@@ -50,12 +50,12 @@ export type DefaultStack = Client & ObservableApi & CacheApi & DedupeApi & Queue
  */
 export function defaults<S>(
 	client: Client,
-	config: DefaultsWithSession<S>
+	config: DefaultsWithSession<S>,
 ): DefaultStack & SessionApi<S>
 export function defaults(client: Client, config?: DefaultsConfig): DefaultStack
 export function defaults(
 	client: Client,
-	config: DefaultsConfig & { session?: SessionConfig<unknown> } = {}
+	config: DefaultsConfig & { session?: SessionConfig<unknown> } = {},
 ): DefaultStack {
 	let stack: Client = client
 		.with(observable(config.observable))

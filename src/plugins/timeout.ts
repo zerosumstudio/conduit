@@ -48,7 +48,7 @@ export function timeout(config: TimeoutConfig = {}): Plugin {
 					method: request.method,
 					url: request.url,
 					owner: request.owner,
-				})
+				}),
 			)
 		}, delay)
 

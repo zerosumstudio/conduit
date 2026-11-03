@@ -118,7 +118,7 @@ describe('transport details', () => {
 		const client = createClient({ fetch: stubFetch(() => new Response('bytes')).fetch })
 
 		await expect(client.get('/x', { parse: 'arrayBuffer' })).resolves.toBeInstanceOf(
-			ArrayBuffer
+			ArrayBuffer,
 		)
 	})
 
@@ -134,7 +134,7 @@ describe('transport details', () => {
 				() =>
 					new Response('bytes', {
 						headers: { 'content-type': 'application/octet-stream' },
-					})
+					}),
 			).fetch,
 		})
 

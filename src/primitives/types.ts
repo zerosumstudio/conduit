@@ -62,7 +62,7 @@ export type ParseMode = 'auto' | 'json' | 'text' | 'blob' | 'arrayBuffer' | 'for
  * Declaration-merge to give your own keys a real type instead of `unknown`:
  *
  * ```ts
- * declare module '@bkincz/conduit' {
+ * declare module '@zerosumstudio/conduit' {
  * 	interface ConduitMeta {
  * 		'my-plugin.skip'?: boolean
  * 	}

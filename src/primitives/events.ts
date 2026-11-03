@@ -132,7 +132,7 @@ export interface RetryAttemptEvent {
  * The event surface. Plugins extend it by declaration merging:
  *
  * ```ts
- * declare module '@bkincz/conduit' {
+ * declare module '@zerosumstudio/conduit' {
  * 	interface ConduitEventMap {
  * 		'cache:hit': { type: 'cache:hit'; key: string; at: number }
  * 	}
@@ -165,7 +165,7 @@ export interface EventBus {
 	readonly active: boolean
 	on<K extends ConduitEventType>(
 		type: K,
-		listener: (event: ConduitEventMap[K]) => void
+		listener: (event: ConduitEventMap[K]) => void,
 	): Unsubscribe
 	/** Every event, whatever its type. What devtools and telemetry bridges want. */
 	onAny(listener: (event: ConduitEvent) => void): Unsubscribe
@@ -190,7 +190,7 @@ export function createEventBus(logger: ConduitLogger = consoleLogger): EventBus 
 		} catch (error) {
 			if (DEV) {
 				logger.error(
-					`[conduit] An event listener threw. The request is unaffected. ${String(error)}`
+					`[conduit] An event listener threw. The request is unaffected. ${String(error)}`,
 				)
 			}
 		}
@@ -220,7 +220,7 @@ export function createEventBus(logger: ConduitLogger = consoleLogger): EventBus 
 
 		on<K extends ConduitEventType>(
 			type: K,
-			listener: (event: ConduitEventMap[K]) => void
+			listener: (event: ConduitEventMap[K]) => void,
 		): Unsubscribe {
 			let listeners = typed.get(type)
 

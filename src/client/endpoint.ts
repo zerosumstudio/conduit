@@ -13,7 +13,7 @@ export interface StandardSchemaV1<Input = unknown, Output = Input> {
 		readonly version: 1
 		readonly vendor: string
 		validate(
-			value: unknown
+			value: unknown,
 		):
 			| { readonly value: Output }
 			| { readonly issues: ReadonlyArray<{ readonly message: string }> }
@@ -63,7 +63,7 @@ export type Endpoint<Vars = void, Result = unknown> = EndpointDefinition<Vars, R
  * ```
  */
 export function defineEndpoint<Vars = void, Result = unknown>(
-	def: EndpointDefinition<Vars, Result>
+	def: EndpointDefinition<Vars, Result>,
 ): Endpoint<Vars, Result> {
 	return { ...def, kind: 'conduit.endpoint' }
 }
@@ -74,7 +74,7 @@ export function defineEndpoint<Vars = void, Result = unknown>(
 /** Endpoints accept a static list or a function of `vars` -- this will read either. */
 export function resolveEndpointTags<Vars>(
 	tags: readonly string[] | ((vars: Vars) => readonly string[]) | undefined,
-	vars: Vars
+	vars: Vars,
 ): readonly string[] | undefined {
 	if (tags === undefined) {
 		return undefined

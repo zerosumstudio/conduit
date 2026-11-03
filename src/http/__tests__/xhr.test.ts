@@ -64,7 +64,7 @@ class FakeXhr extends EventTarget {
 
 	progress(loaded: number, total: number, lengthComputable = true): void {
 		this.upload.dispatchEvent(
-			Object.assign(new Event('progress'), { loaded, total, lengthComputable })
+			Object.assign(new Event('progress'), { loaded, total, lengthComputable }),
 		)
 	}
 }
@@ -143,7 +143,7 @@ describe('createXhrFetch', () => {
 		FakeXhr.instances[0]?.respond(
 			201,
 			new Blob(['{"id":1}']),
-			'content-type: application/json\r\nx-request-id: abc\r\n'
+			'content-type: application/json\r\nx-request-id: abc\r\n',
 		)
 
 		const response = await pending
@@ -160,7 +160,7 @@ describe('createXhrFetch', () => {
 		FakeXhr.instances[0]?.respond(
 			200,
 			new Blob(),
-			'not-a-header-line\r\ncontent-type: text/plain\r\n'
+			'not-a-header-line\r\ncontent-type: text/plain\r\n',
 		)
 
 		const response = await pending

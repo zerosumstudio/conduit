@@ -95,7 +95,7 @@ interface PendingRead {
  */
 function mergeTags(
 	previous: readonly string[] | undefined,
-	next: readonly string[]
+	next: readonly string[],
 ): readonly string[] {
 	if (previous === undefined || previous.length === 0) {
 		return next
@@ -200,7 +200,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 	const write = (
 		request: ConduitRequest,
 		response: ConduitResponse,
-		pending: PendingRead
+		pending: PendingRead,
 	): void => {
 		if (pending.suppressed) {
 			return
@@ -225,7 +225,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 	const serve = (
 		entry: Entry,
 		request: ConduitRequest,
-		from: ResponseSource
+		from: ResponseSource,
 	): ConduitResponse => ({
 		status: entry.status,
 		headers: entry.headers,
@@ -394,7 +394,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 
 				setData: <T>(
 					key: string,
-					data: T | ((previous: T | undefined) => T)
+					data: T | ((previous: T | undefined) => T),
 				): T | undefined => {
 					const existing = entries.get(key)
 					const previous = existing?.data as T | undefined

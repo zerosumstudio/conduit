@@ -336,7 +336,7 @@ describe('client.upload', () => {
 					loaded: 1,
 					total: 2,
 					lengthComputable: true,
-				})
+				}),
 			)
 
 			await expect(pending).resolves.toEqual({ ok: true })

@@ -15,10 +15,10 @@ import {
 	type Endpoint,
 	type SessionAdapter,
 	type StandardSchemaV1,
-} from '@bkincz/conduit'
-import { createHooks } from '@bkincz/conduit/react'
-import { attachDevtools } from '@bkincz/conduit/devtools'
-import { createMockServer, status } from '@bkincz/conduit/testing'
+} from '@zerosumstudio/conduit'
+import { createHooks } from '@zerosumstudio/conduit/react'
+import { attachDevtools } from '@zerosumstudio/conduit/devtools'
+import { createMockServer, status } from '@zerosumstudio/conduit/testing'
 
 interface User {
 	id: string
@@ -60,9 +60,9 @@ const api = sharedClient(
 				credentials: 'same-origin',
 				keepalive: true,
 			}),
-			{ cache: { ttl: 1_000 }, session: { adapter, origins: ['https://api.example.com'] } }
+			{ cache: { ttl: 1_000 }, session: { adapter, origins: ['https://api.example.com'] } },
 		),
-	{ contract: 'v1', version: 1 }
+	{ contract: 'v1', version: 1 },
 )
 
 const stateStatus = api.session.get().status
@@ -111,7 +111,7 @@ function component(id: string) {
 	const query = hooks.useRequest(
 		getUser,
 		{ id },
-		{ keepPreviousData: true, refetchOnFocus: true }
+		{ keepPreviousData: true, refetchOnFocus: true },
 	)
 	const fresh: boolean = !query.isStale
 	const mutation = hooks.useMutation(updateUser)
@@ -119,7 +119,7 @@ function component(id: string) {
 		vars => api.post<User>('/users', vars),
 		{
 			invalidates: ['users'],
-		}
+		},
 	)
 	const message: string | undefined = isConduitError(mutation.error)
 		? mutation.error.message

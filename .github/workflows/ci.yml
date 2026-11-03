@@ -9,10 +9,17 @@ on:
 permissions:
     contents: read
 
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
     test:
         name: Test
         runs-on: ${{ matrix.os }}
+        permissions:
+            contents: read
+            id-token: write
         strategy:
             fail-fast: false
             matrix:
@@ -21,13 +28,13 @@ jobs:
 
         steps:
             - name: Checkout
-              uses: actions/checkout@v7
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: Setup pnpm
-              uses: pnpm/action-setup@v6
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node.js ${{ matrix.node-version }}
-              uses: actions/setup-node@v6
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: ${{ matrix.node-version }}
                   cache: 'pnpm'
@@ -47,6 +54,15 @@ jobs:
             - name: Test (with coverage)
               run: pnpm run test:coverage
 
+            - name: Upload coverage to Codecov
+              if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
+              uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+              with:
+                  use_oidc: true
+                  disable_search: true
+                  files: ./coverage/lcov.info
+                  fail_ci_if_error: false
+
     build:
         name: Build
         runs-on: ubuntu-latest
@@ -54,13 +70,13 @@ jobs:
 
         steps:
             - name: Checkout
-              uses: actions/checkout@v7
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: Setup pnpm
-              uses: pnpm/action-setup@v6
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node.js
-              uses: actions/setup-node@v6
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: 24
                   cache: 'pnpm'
@@ -78,7 +94,7 @@ jobs:
               run: pnpm run size
 
             - name: Upload build artifacts
-              uses: actions/upload-artifact@v7
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
               with:
                   name: dist
                   path: dist
@@ -91,13 +107,13 @@ jobs:
 
         steps:
             - name: Checkout
-              uses: actions/checkout@v7
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: Setup pnpm
-              uses: pnpm/action-setup@v6
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node.js
-              uses: actions/setup-node@v6
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: 24
                   cache: 'pnpm'
@@ -117,16 +133,16 @@ jobs:
                   mkdir -p consumer && cd consumer
                   npm init -y > /dev/null
                   npm pkg set type=module
-                  npm install "$RUNNER_TEMP"/bkincz-conduit-*.tgz react
+                  npm install "$RUNNER_TEMP"/zerosumstudio-conduit-*.tgz react
 
             - name: Import every export, ESM and CJS
               working-directory: ${{ runner.temp }}/consumer
               run: |
                   node --input-type=module -e '
-                    const { createClient, defaults } = await import("@bkincz/conduit")
-                    await import("@bkincz/conduit/react")
-                    await import("@bkincz/conduit/devtools")
-                    const { createMockServer } = await import("@bkincz/conduit/testing")
+                    const { createClient, defaults } = await import("@zerosumstudio/conduit")
+                    await import("@zerosumstudio/conduit/react")
+                    await import("@zerosumstudio/conduit/devtools")
+                    const { createMockServer } = await import("@zerosumstudio/conduit/testing")
                     const server = createMockServer({ baseUrl: "/api" })
                     server.get("/ping", () => ({ ok: true }))
                     const api = defaults(createClient({ baseUrl: "/api", fetch: server.fetch }))
@@ -134,21 +150,21 @@ jobs:
                     if (body.ok !== true) throw new Error("unexpected body: " + JSON.stringify(body))
                   '
                   node -e '
-                    require("@bkincz/conduit")
-                    require("@bkincz/conduit/react")
-                    require("@bkincz/conduit/devtools")
-                    require("@bkincz/conduit/testing")
+                    require("@zerosumstudio/conduit")
+                    require("@zerosumstudio/conduit/react")
+                    require("@zerosumstudio/conduit/devtools")
+                    require("@zerosumstudio/conduit/testing")
                   '
 
             - name: Type-check against the tarball
               working-directory: ${{ runner.temp }}/consumer
               run: |
-                  npm install typescript@5 @types/react @types/node
+                  npm install typescript@6 @types/react @types/node
                   cat > index.ts <<'TS'
-                  import { createClient, defaults, type ConduitError } from '@bkincz/conduit'
-                  import { createHooks } from '@bkincz/conduit/react'
-                  import { attachDevtools } from '@bkincz/conduit/devtools'
-                  import { createMockServer } from '@bkincz/conduit/testing'
+                  import { createClient, defaults, type ConduitError } from '@zerosumstudio/conduit'
+                  import { createHooks } from '@zerosumstudio/conduit/react'
+                  import { attachDevtools } from '@zerosumstudio/conduit/devtools'
+                  import { createMockServer } from '@zerosumstudio/conduit/testing'
 
                   const api = defaults(createClient({ baseUrl: '/api' }))
                   const hooks = createHooks(api)
@@ -158,3 +174,21 @@ jobs:
                   export type Exports = [typeof hooks.useRequest, typeof devtools.store, typeof server.calls, ConduitError]
                   TS
                   npx tsc --noEmit --strict --module nodenext --moduleResolution nodenext --target es2022 --jsx react-jsx index.ts
+
+            - name: Type-check the CommonJS types against the tarball
+              working-directory: ${{ runner.temp }}/consumer
+              run: |
+                  cat > index.cts <<'TS'
+                  import conduit = require('@zerosumstudio/conduit')
+                  import react = require('@zerosumstudio/conduit/react')
+                  import devtools = require('@zerosumstudio/conduit/devtools')
+                  import testing = require('@zerosumstudio/conduit/testing')
+
+                  export type Exports = [
+                      typeof conduit.createClient,
+                      typeof react.createHooks,
+                      typeof devtools.attachDevtools,
+                      typeof testing.createMockServer,
+                  ]
+                  TS
+                  npx tsc --noEmit --strict --module nodenext --moduleResolution nodenext --target es2022 --jsx react-jsx index.cts

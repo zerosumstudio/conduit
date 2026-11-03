@@ -59,7 +59,7 @@ export function contract(config: ContractConfig): Plugin {
 			config.onMismatch(report)
 		} else {
 			console.warn(
-				`[conduit] This bundle was built against API ${expected}, but ${request.url} answered as ${actual}. One of them has been deployed without the other.`
+				`[conduit] This bundle was built against API ${expected}, but ${request.url} answered as ${actual}. One of them has been deployed without the other.`,
 			)
 		}
 

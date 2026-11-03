@@ -11,6 +11,6 @@ export function compose(middlewares: readonly Middleware[], terminal: Next): Nex
 
 	return middlewares.reduceRight<Next>(
 		(downstream, middleware) => request => middleware(request, downstream),
-		terminal
+		terminal,
 	)
 }

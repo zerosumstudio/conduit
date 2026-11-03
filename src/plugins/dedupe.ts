@@ -52,7 +52,7 @@ export function dedupe(config: DedupeConfig = {}): Plugin<DedupeApi> {
 	const join = async (
 		flight: Flight,
 		request: ConduitRequest,
-		joined: boolean
+		joined: boolean,
 	): Promise<ConduitResponse> => {
 		flight.participants++
 

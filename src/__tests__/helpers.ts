@@ -31,7 +31,7 @@ export function hangingFetch(): FetchStub {
 					error.name = 'AbortError'
 					reject(error)
 				})
-			})
+			}),
 	)
 }
 

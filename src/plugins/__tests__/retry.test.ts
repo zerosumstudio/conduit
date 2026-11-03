@@ -6,7 +6,7 @@ import { retry, type RetryInfo } from '../retry'
 
 function flaky(
 	failures: number,
-	status = 503
+	status = 503,
 ): { fetch: ReturnType<typeof stubFetch>['fetch']; count: () => number } {
 	let calls = 0
 	const stub = stubFetch(() => {
@@ -86,7 +86,7 @@ describe('retry', () => {
 	it('will replay a write when told the endpoint is safe', async () => {
 		const server = flaky(1)
 		const client = createClient({ fetch: server.fetch }).with(
-			retry({ ...fast, idempotentOnly: false })
+			retry({ ...fast, idempotentOnly: false }),
 		)
 
 		await expect(client.post('/x', { a: 1 })).resolves.toEqual({ ok: true })
@@ -128,7 +128,7 @@ describe('retry', () => {
 				return Promise.resolve(
 					calls === 1
 						? new Response('', { status: 503, headers: { 'retry-after': '2' } })
-						: jsonResponse({ ok: true })
+						: jsonResponse({ ok: true }),
 				)
 			},
 		}).with(
@@ -136,7 +136,7 @@ describe('retry', () => {
 				baseDelay: 60_000,
 				jitter: false,
 				onRetry: (info: RetryInfo) => delays.push(info.delay),
-			})
+			}),
 		)
 
 		const pending = client.get('/x')
@@ -150,7 +150,7 @@ describe('retry', () => {
 		const delays: number[] = []
 		const server = flaky(2)
 		const client = createClient({ fetch: server.fetch }).with(
-			retry({ baseDelay: 1, jitter: false, onRetry: info => delays.push(info.delay) })
+			retry({ baseDelay: 1, jitter: false, onRetry: info => delays.push(info.delay) }),
 		)
 
 		await client.get('/x')
@@ -167,7 +167,7 @@ describe('retry', () => {
 				maxDelay: 1,
 				jitter: false,
 				onRetry: info => delays.push(info.delay),
-			})
+			}),
 		)
 
 		await client.get('/x')
@@ -178,7 +178,7 @@ describe('retry', () => {
 	it('takes a caller-supplied decision', async () => {
 		const server = flaky(1, 400)
 		const client = createClient({ fetch: server.fetch }).with(
-			retry({ ...fast, shouldRetry: error => error.status === 400 })
+			retry({ ...fast, shouldRetry: error => error.status === 400 }),
 		)
 
 		await expect(client.get('/x')).resolves.toEqual({ ok: true })
@@ -194,7 +194,7 @@ describe('retry', () => {
 				return Promise.resolve(
 					calls === 1
 						? new Response('', { status: 503, headers: { 'retry-after': '' } })
-						: jsonResponse({ ok: true })
+						: jsonResponse({ ok: true }),
 				)
 			},
 		}).with(retry({ ...fast, onRetry: info => delays.push(info.delay) }))
@@ -208,7 +208,7 @@ describe('retry', () => {
 		const client = createClient({
 			fetch: () =>
 				Promise.resolve(
-					new Response('', { status: 503, headers: { 'retry-after': '120' } })
+					new Response('', { status: 503, headers: { 'retry-after': '120' } }),
 				),
 		}).with(retry({ ...fast, attempts: 1 }))
 
@@ -229,7 +229,7 @@ describe('retry', () => {
 	it('never retries a request whose body is a consumed ReadableStream', async () => {
 		const server = flaky(5)
 		const client = createClient({ fetch: server.fetch }).with(
-			retry({ ...fast, idempotentOnly: false })
+			retry({ ...fast, idempotentOnly: false }),
 		)
 
 		const stream = new ReadableStream({
@@ -248,7 +248,7 @@ describe('retry', () => {
 	it('still retries a stream body that has not been read yet', async () => {
 		const server = flaky(1)
 		const client = createClient({ fetch: server.fetch }).with(
-			retry({ ...fast, idempotentOnly: false })
+			retry({ ...fast, idempotentOnly: false }),
 		)
 
 		const stream = new ReadableStream({

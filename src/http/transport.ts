@@ -58,7 +58,7 @@ function resolveMode(response: Response, mode: ParseMode): Exclude<ParseMode, 'a
 async function decode(
 	response: Response,
 	request: ConduitRequest,
-	tolerant: boolean
+	tolerant: boolean,
 ): Promise<unknown> {
 	const mode = resolveMode(response, request.parse)
 

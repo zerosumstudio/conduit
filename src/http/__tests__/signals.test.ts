@@ -74,7 +74,7 @@ describe('composeManually', () => {
 		spent.abort('gone')
 
 		expect(composeManually([spent.signal, new AbortController().signal]).signal.aborted).toBe(
-			true
+			true,
 		)
 	})
 
