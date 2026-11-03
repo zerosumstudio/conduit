@@ -207,7 +207,7 @@ describe('failing responses', () => {
 					new Response('<html>maintenance</html>', {
 						status: 503,
 						headers: { 'content-type': 'application/json' },
-					})
+					}),
 				),
 		})
 
@@ -229,7 +229,7 @@ describe('failing responses', () => {
 								status: 503,
 								headers: { 'content-type': 'application/json' },
 							})
-						: jsonResponse({ ok: true })
+						: jsonResponse({ ok: true }),
 				)
 			},
 		}).with(retry({ baseDelay: 1, jitter: false }))
@@ -242,7 +242,7 @@ describe('failing responses', () => {
 		const client = createClient({
 			fetch: () =>
 				Promise.resolve(
-					new Response('{oops', { headers: { 'content-type': 'application/json' } })
+					new Response('{oops', { headers: { 'content-type': 'application/json' } }),
 				),
 		})
 
@@ -255,7 +255,7 @@ describe('cache lifetime', () => {
 		let version = 1
 		const stub = stubFetch(() => jsonResponse({ version: version++ }))
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true })
+			cache({ ttl: 0, staleWhileRevalidate: true }),
 		)
 
 		await client.get('/me')
@@ -389,7 +389,7 @@ describe('retry budget', () => {
 			fetch: () => {
 				calls++
 				return Promise.resolve(
-					new Response('', { status: 429, headers: { 'retry-after': '3600' } })
+					new Response('', { status: 429, headers: { 'retry-after': '3600' } }),
 				)
 			},
 		}).with(retry({ attempts: 3, maxDelay: 5_000 }))
@@ -410,7 +410,7 @@ describe('retry budget', () => {
 				return Promise.resolve(
 					calls === 1
 						? new Response('', { status: 503, headers: { 'retry-after': '1' } })
-						: jsonResponse({ ok: true })
+						: jsonResponse({ ok: true }),
 				)
 			},
 		}).with(retry({ maxDelay: 5_000 }))
@@ -556,13 +556,13 @@ describe('session lifecycle', () => {
 						return withRequest(request, { headers })
 					},
 				},
-			})
+			}),
 		)
 
 		await Promise.all([client.get('/a'), client.get('/b')])
 
 		expect(stub.calls.map(call => new Headers(call.init.headers).get('authorization'))).toEqual(
-			['Bearer Ada', 'Bearer Ada']
+			['Bearer Ada', 'Bearer Ada'],
 		)
 	})
 
@@ -575,7 +575,7 @@ describe('session lifecycle', () => {
 			.with(
 				session({
 					adapter: { load: ctx => ctx.request<{ name: string }>('/auth/session') },
-				})
+				}),
 			)
 
 		await client.session.load()
@@ -594,7 +594,7 @@ describe('session lifecycle', () => {
 			session({
 				adapter: { load: async () => ({ name: 'Ada' }), renew },
 				onUnauthenticated,
-			})
+			}),
 		)
 
 		const { error } = await client.get('/x').safe()
@@ -610,7 +610,7 @@ describe('session lifecycle', () => {
 
 		vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
 			handler: () => void,
-			ms?: number
+			ms?: number,
 		) => {
 			delays.push(ms ?? 0)
 			return real(handler, 0)
@@ -623,7 +623,7 @@ describe('session lifecycle', () => {
 					load: async () => ({ name: 'Ada' }),
 					expiresAt: () => Date.now() + thirtyDays,
 				},
-			})
+			}),
 		)
 
 		await client.session.load()

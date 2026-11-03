@@ -109,7 +109,7 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 
 	const complete = (
 		request: ConduitRequest,
-		patch: Omit<Partial<DevtoolsEntry>, 'id'> & { state: 'success' | 'error' }
+		patch: Omit<Partial<DevtoolsEntry>, 'id'> & { state: 'success' | 'error' },
 	): void => {
 		const id = pending.get(request)
 
@@ -123,7 +123,7 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 			...current,
 			inFlight: pending.size,
 			entries: current.entries.map(entry =>
-				entry.id === id ? { ...entry, ...patch } : entry
+				entry.id === id ? { ...entry, ...patch } : entry,
 			),
 		}))
 	}

@@ -66,7 +66,7 @@ describe('cache', () => {
 			() =>
 				new Response('{"id":1}', {
 					headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-				})
+				}),
 		)
 		const client = createClient({ fetch: stub.fetch }).with(cache())
 
@@ -80,7 +80,7 @@ describe('cache', () => {
 		let version = 1
 		const stub = stubFetch(() => jsonResponse({ version: version++ }))
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true })
+			cache({ ttl: 0, staleWhileRevalidate: true }),
 		)
 
 		expect(await client.get('/me')).toEqual({ version: 1 })
@@ -98,7 +98,7 @@ describe('cache', () => {
 	it('runs one refresh, not one per reader', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true })
+			cache({ ttl: 0, staleWhileRevalidate: true }),
 		)
 
 		await client.get('/me')
@@ -116,7 +116,7 @@ describe('cache', () => {
 			return calls === 1 ? jsonResponse({ id: 1 }) : jsonResponse({}, 500)
 		})
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true })
+			cache({ ttl: 0, staleWhileRevalidate: true }),
 		)
 
 		await client.get('/me')
@@ -298,7 +298,7 @@ describe('cache', () => {
 
 	it('reports a stale read separately from a hit', async () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true })
+			cache({ ttl: 0, staleWhileRevalidate: true }),
 		)
 		const stale = vi.fn()
 

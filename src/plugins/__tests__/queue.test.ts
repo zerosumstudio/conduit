@@ -142,7 +142,7 @@ describe('queue', () => {
 	it('stops one lane from taking the whole pool', async () => {
 		const gated = gatedFetch()
 		const client = createClient({ fetch: gated.fetch }).with(
-			queue({ concurrency: 4, limits: { prefetch: 1 } })
+			queue({ concurrency: 4, limits: { prefetch: 1 } }),
 		)
 
 		const pending = [

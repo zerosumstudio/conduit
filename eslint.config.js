@@ -31,7 +31,11 @@ export default defineConfig([
 		},
 	},
 	{
-		files: ['src/**/*.{test,spec,bench}.ts'],
+		files: [
+			'src/**/__tests__/**/*.ts',
+			'src/**/__bench__/**/*.ts',
+			'src/**/*.{test,spec,bench}.ts',
+		],
 		rules: {
 			'@typescript-eslint/no-explicit-any': 'off',
 		},

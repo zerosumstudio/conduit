@@ -65,7 +65,7 @@ describe('createFetchTransport', () => {
 		form.set('a', '1')
 		const response = new Response(form)
 		const transport = createFetchTransport(
-			resolvedConfig({ fetch: () => Promise.resolve(response) })
+			resolvedConfig({ fetch: () => Promise.resolve(response) }),
 		)
 
 		const result = await transport(request({ parse: 'formData' }))
@@ -81,7 +81,7 @@ describe('createFetchTransport', () => {
 					seen.push(init)
 					return Promise.resolve(jsonResponse({ ok: true }))
 				},
-			})
+			}),
 		)
 
 		const stream = new ReadableStream()
@@ -98,7 +98,7 @@ describe('createFetchTransport', () => {
 					seen.push(init)
 					return Promise.resolve(jsonResponse({ ok: true }))
 				},
-			})
+			}),
 		)
 
 		await transport(request({ body: 'hello' }))
@@ -114,7 +114,7 @@ describe('createFetchTransport', () => {
 					seen.push(init)
 					return Promise.resolve(jsonResponse({ ok: true }))
 				},
-			})
+			}),
 		)
 
 		await transport(
@@ -126,7 +126,7 @@ describe('createFetchTransport', () => {
 				priority: 'high',
 				referrerPolicy: 'no-referrer',
 				integrity: 'sha256-abc',
-			})
+			}),
 		)
 
 		expect(seen[0]).toMatchObject({
@@ -148,7 +148,7 @@ describe('createFetchTransport', () => {
 					seen.push(init)
 					return Promise.resolve(jsonResponse({ ok: true }))
 				},
-			})
+			}),
 		)
 
 		await transport(request())
@@ -170,7 +170,7 @@ describe('createFetchTransport', () => {
 					streamController.error(new Error('stream broke'))
 				},
 			}),
-			{ headers: { 'content-type': 'application/octet-stream' } }
+			{ headers: { 'content-type': 'application/octet-stream' } },
 		)
 
 		const transport = createFetchTransport(
@@ -179,11 +179,11 @@ describe('createFetchTransport', () => {
 					controller.abort()
 					return Promise.resolve(badResponse)
 				},
-			})
+			}),
 		)
 
 		await expect(
-			transport(request({ signal: controller.signal, parse: 'arrayBuffer' }))
+			transport(request({ signal: controller.signal, parse: 'arrayBuffer' })),
 		).rejects.toMatchObject({ code: 'ABORTED' })
 	})
 
@@ -194,11 +194,11 @@ describe('createFetchTransport', () => {
 					streamController.error(new Error('stream broke'))
 				},
 			}),
-			{ headers: { 'content-type': 'application/octet-stream' } }
+			{ headers: { 'content-type': 'application/octet-stream' } },
 		)
 
 		const transport = createFetchTransport(
-			resolvedConfig({ fetch: () => Promise.resolve(badResponse) })
+			resolvedConfig({ fetch: () => Promise.resolve(badResponse) }),
 		)
 
 		await expect(transport(request({ parse: 'arrayBuffer' }))).rejects.toMatchObject({
@@ -208,7 +208,7 @@ describe('createFetchTransport', () => {
 
 	it('reports a rejection that is not even an Error as NETWORK', async () => {
 		const transport = createFetchTransport(
-			resolvedConfig({ fetch: () => Promise.reject('offline') })
+			resolvedConfig({ fetch: () => Promise.reject('offline') }),
 		)
 
 		await expect(transport(request())).rejects.toMatchObject({ code: 'NETWORK' })
@@ -221,11 +221,11 @@ describe('createFetchTransport', () => {
 					streamController.error(new Error('stream broke'))
 				},
 			}),
-			{ status: 500, headers: { 'content-type': 'application/octet-stream' } }
+			{ status: 500, headers: { 'content-type': 'application/octet-stream' } },
 		)
 
 		const transport = createFetchTransport(
-			resolvedConfig({ fetch: () => Promise.resolve(badResponse) })
+			resolvedConfig({ fetch: () => Promise.resolve(badResponse) }),
 		)
 
 		await expect(transport(request({ parse: 'arrayBuffer' }))).rejects.toMatchObject({

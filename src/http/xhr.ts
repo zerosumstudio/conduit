@@ -21,7 +21,7 @@ export interface XhrFetchOptions {
 function toProgressEvent(
 	loaded: number,
 	total: number,
-	lengthComputable: boolean
+	lengthComputable: boolean,
 ): UploadProgressEvent {
 	return {
 		loaded,
@@ -95,7 +95,7 @@ export function createXhrFetch(options: XhrFetchOptions = {}): FetchLike {
 						status: xhr.status,
 						statusText: xhr.statusText,
 						headers: parseRawHeaders(xhr.getAllResponseHeaders()),
-					})
+					}),
 				)
 			})
 

@@ -138,7 +138,7 @@ function collect(init: HeadersInit | undefined, into: Map<string, string>): void
 export function fingerprintHeaders(
 	configHeaders: HeadersInit | undefined,
 	optionHeaders: HeadersInit | undefined,
-	vary: Vary
+	vary: Vary,
 ): string {
 	if (vary !== '*' && vary.length === 0) {
 		return ''
@@ -178,7 +178,7 @@ export function deriveVariance(
 	configHeaders: HeadersInit | undefined,
 	optionHeaders: HeadersInit | undefined,
 	vary: Vary,
-	credentials: RequestCredentials | undefined
+	credentials: RequestCredentials | undefined,
 ): string {
 	const headers = fingerprintHeaders(configHeaders, optionHeaders, vary)
 	const parts: string[] = []

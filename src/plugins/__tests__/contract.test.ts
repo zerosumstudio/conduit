@@ -16,7 +16,7 @@ describe('contract', () => {
 	it('says nothing when the versions agree', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v1')).fetch }).with(
-			contract({ expected: 'v1' })
+			contract({ expected: 'v1' }),
 		)
 
 		await client.get('/x')
@@ -28,7 +28,7 @@ describe('contract', () => {
 	it('says nothing when the server does not report a version', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned(null)).fetch }).with(
-			contract({ expected: 'v1' })
+			contract({ expected: 'v1' }),
 		)
 
 		await client.get('/x')
@@ -40,7 +40,7 @@ describe('contract', () => {
 	it('reports a skew between bundle and backend', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v2')).fetch }).with(
-			contract({ expected: 'v1' })
+			contract({ expected: 'v1' }),
 		)
 
 		await client.get('/x')
@@ -52,7 +52,7 @@ describe('contract', () => {
 	it('reports once per server version, not once per request', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v2')).fetch }).with(
-			contract({ expected: 'v1' })
+			contract({ expected: 'v1' }),
 		)
 
 		await client.get('/a')
@@ -67,7 +67,7 @@ describe('contract', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		let version = 'v2'
 		const client = createClient({ fetch: stubFetch(() => versioned(version)).fetch }).with(
-			contract({ expected: 'v1' })
+			contract({ expected: 'v1' }),
 		)
 
 		await client.get('/a')
@@ -96,12 +96,12 @@ describe('contract', () => {
 	it('reports on the event stream too', async () => {
 		vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v2')).fetch }).with(
-			contract({ expected: 'v1' })
+			contract({ expected: 'v1' }),
 		)
 		const seen: Array<{ expected: string; actual: string }> = []
 
 		client.events.on('contract:mismatch', event =>
-			seen.push({ expected: event.expected, actual: event.actual })
+			seen.push({ expected: event.expected, actual: event.actual }),
 		)
 
 		await client.get('/x')
@@ -117,7 +117,7 @@ describe('contract', () => {
 				() =>
 					new Response('{}', {
 						headers: { 'content-type': 'application/json', 'api-revision': '9' },
-					})
+					}),
 			).fetch,
 		}).with(contract({ expected: '8', header: 'api-revision' }))
 

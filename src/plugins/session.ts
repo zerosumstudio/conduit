@@ -171,7 +171,7 @@ export function session<S = unknown>(config: SessionConfig<S>): Plugin<SessionAp
 			} catch (error) {
 				console.error(
 					'[conduit] A session listener threw. The session is unaffected.',
-					error
+					error,
 				)
 			}
 		}

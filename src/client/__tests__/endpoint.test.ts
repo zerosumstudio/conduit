@@ -193,7 +193,7 @@ describe('client.keyFor with an endpoint', () => {
 		})
 
 		expect(client.keyFor(getUser, { id: '7' })).toBe(
-			client.keyFor('/users/:id', { method: 'GET', params: { id: '7' } })
+			client.keyFor('/users/:id', { method: 'GET', params: { id: '7' } }),
 		)
 	})
 })

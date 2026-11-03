@@ -23,7 +23,7 @@ describe('observable', () => {
 
 	it('moves through loading to success', async () => {
 		const client = createClient({ baseUrl: '/api', fetch: stubFetch(ok).fetch }).with(
-			observable()
+			observable(),
 		)
 		const store = client.observe<{ id: number }>(client.keyFor('/me'))
 		const seen: string[] = []
@@ -43,7 +43,7 @@ describe('observable', () => {
 			fetch: () => {
 				calls++
 				return Promise.resolve(
-					calls === 1 ? jsonResponse({ id: 1 }) : jsonResponse({}, 500)
+					calls === 1 ? jsonResponse({ id: 1 }) : jsonResponse({}, 500),
 				)
 			},
 		}).with(observable())

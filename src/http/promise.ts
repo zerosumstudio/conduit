@@ -19,7 +19,7 @@ export function conduitPromise<T>(run: Promise<ConduitResponse<T>>): ConduitProm
 
 		return run.then(
 			(response): SafeResult<T> => ({ data: response.data, error: null }),
-			(error: unknown): SafeResult<T> => ({ data: null, error: toConduitError(error) })
+			(error: unknown): SafeResult<T> => ({ data: null, error: toConduitError(error) }),
 		)
 	}
 

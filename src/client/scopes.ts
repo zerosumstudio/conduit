@@ -47,7 +47,7 @@ export function createScope(init: ScopeInit): Scope {
 					code: 'ABORTED',
 					message: reason ?? `Scope "${init.name}" was aborted.`,
 					owner: init.name,
-				})
+				}),
 			)
 		}
 

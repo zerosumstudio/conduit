@@ -200,8 +200,8 @@ describe('response builders', () => {
 		expect(json({ a: 1 }).headers.get('content-type')).toBe('application/json')
 		expect(
 			json({ a: 1 }, { headers: { 'content-type': 'application/vnd.x' } }).headers.get(
-				'content-type'
-			)
+				'content-type',
+			),
 		).toBe('application/vnd.x')
 	})
 

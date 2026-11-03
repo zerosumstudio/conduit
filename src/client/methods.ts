@@ -19,7 +19,7 @@ export type Executor = <T>(path: string, options: RequestOptions) => ConduitProm
 export function bodyOptions(
 	method: HttpMethod,
 	body: unknown,
-	options: MethodOptions | undefined
+	options: MethodOptions | undefined,
 ): RequestOptions {
 	return body === undefined ? { ...options, method } : { ...options, method, body }
 }
@@ -45,7 +45,7 @@ export function createMethods(execute: Executor): RequestMethods {
 		post<T = unknown>(
 			path: string,
 			body?: unknown,
-			options?: MethodOptions
+			options?: MethodOptions,
 		): ConduitPromise<T> {
 			return execute<T>(path, bodyOptions('POST', body, options))
 		},
@@ -55,7 +55,7 @@ export function createMethods(execute: Executor): RequestMethods {
 		patch<T = unknown>(
 			path: string,
 			body?: unknown,
-			options?: MethodOptions
+			options?: MethodOptions,
 		): ConduitPromise<T> {
 			return execute<T>(path, bodyOptions('PATCH', body, options))
 		},

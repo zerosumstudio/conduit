@@ -23,7 +23,7 @@ const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0
 describe('session loading', () => {
 	it('starts out knowing nothing, rather than guessing', () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(async () => ({ name: 'Ada' })) })
+			session({ adapter: readOnlyAdapter(async () => ({ name: 'Ada' })) }),
 		)
 
 		expect(client.session.get().status).toBe('unknown')
@@ -32,7 +32,7 @@ describe('session loading', () => {
 	it('loads once for however many callers ask at once', async () => {
 		const load = vi.fn(async () => ({ name: 'Ada' }))
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(load) })
+			session({ adapter: readOnlyAdapter(load) }),
 		)
 
 		const results = await Promise.all([
@@ -49,7 +49,7 @@ describe('session loading', () => {
 	it('answers from what it already knows', async () => {
 		const load = vi.fn(async () => ({ name: 'Ada' }))
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(load) })
+			session({ adapter: readOnlyAdapter(load) }),
 		)
 
 		await client.session.load()
@@ -61,7 +61,7 @@ describe('session loading', () => {
 	it('re-reads on demand', async () => {
 		const load = vi.fn(async () => ({ name: 'Ada' }))
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(load) })
+			session({ adapter: readOnlyAdapter(load) }),
 		)
 
 		await client.session.load()
@@ -72,7 +72,7 @@ describe('session loading', () => {
 
 	it('treats a null session as signed out, not as a failure', async () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(async () => null) })
+			session({ adapter: readOnlyAdapter(async () => null) }),
 		)
 
 		await client.session.load()
@@ -88,7 +88,7 @@ describe('session loading', () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
 			session({
 				adapter: readOnlyAdapter(() => Promise.reject(new Error('gateway down'))),
-			})
+			}),
 		)
 
 		await expect(client.session.load()).rejects.toThrow('gateway down')
@@ -107,7 +107,7 @@ describe('session loading', () => {
 
 					return { name: 'Ada' }
 				}),
-			})
+			}),
 		)
 
 		await client.session.load()
@@ -124,7 +124,7 @@ describe('session loading', () => {
 		const load = vi.fn(async () => ({ name: 'Ada' }))
 
 		createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(load), eager: true })
+			session({ adapter: readOnlyAdapter(load), eager: true }),
 		)
 
 		await settle()
@@ -135,7 +135,7 @@ describe('session loading', () => {
 	it('notifies subscribers and stops when they leave', async () => {
 		const seen: string[] = []
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(async () => ({ name: 'Ada' })) })
+			session({ adapter: readOnlyAdapter(async () => ({ name: 'Ada' })) }),
 		)
 
 		const off = client.session.subscribe(state => seen.push(state.status))
@@ -154,7 +154,7 @@ describe('session loading', () => {
 				adapter: {
 					load: async ctx => ctx.request<User>('/auth/session'),
 				},
-			})
+			}),
 		)
 
 		await expect(client.session.load()).resolves.toEqual({ name: 'Ada' })
@@ -234,7 +234,7 @@ describe('unrecoverable sessions', () => {
 					isUnauthenticated: error => error.status === 419,
 				},
 				onUnauthenticated,
-			})
+			}),
 		)
 
 		await client.get('/a').safe()
@@ -256,7 +256,7 @@ describe('recoverable sessions', () => {
 			fetch: () => {
 				calls++
 				return Promise.resolve(
-					authorised ? jsonResponse({ ok: true }) : jsonResponse({}, 401)
+					authorised ? jsonResponse({ ok: true }) : jsonResponse({}, 401),
 				)
 			},
 		}).with(session({ adapter: { load: async () => ({ name: 'Ada' }), renew } }))
@@ -296,7 +296,7 @@ describe('recoverable sessions', () => {
 			session({
 				adapter: { load: async () => null, renew: async () => false },
 				onUnauthenticated,
-			})
+			}),
 		)
 
 		expect((await client.get('/a').safe()).error?.status).toBe(401)
@@ -330,7 +330,7 @@ describe('recoverable sessions', () => {
 					},
 				},
 				onUnauthenticated,
-			})
+			}),
 		)
 
 		expect((await client.get('/a').safe()).error?.status).toBe(401)
@@ -356,7 +356,7 @@ describe('authorized requests', () => {
 						return withRequest(request, { headers })
 					},
 				},
-			})
+			}),
 		)
 
 		await client.get('/a')
@@ -367,7 +367,7 @@ describe('authorized requests', () => {
 	it('does not make a cookie-style adapter wait on anything', async () => {
 		const load = vi.fn(async () => ({ name: 'Ada' }))
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(load) })
+			session({ adapter: readOnlyAdapter(load) }),
 		)
 
 		await client.get('/a')
@@ -379,7 +379,7 @@ describe('authorized requests', () => {
 describe('session events', () => {
 	it('reports each transition', async () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			session({ adapter: readOnlyAdapter(async () => ({ name: 'Ada' })) })
+			session({ adapter: readOnlyAdapter(async () => ({ name: 'Ada' })) }),
 		)
 		const seen: string[] = []
 
@@ -521,7 +521,7 @@ describe('origin guard', () => {
 						return withRequest(request, { headers })
 					},
 				},
-			})
+			}),
 		)
 
 		await client.session.load()
@@ -550,7 +550,7 @@ describe('origin guard', () => {
 						return withRequest(request, { headers })
 					},
 				},
-			})
+			}),
 		)
 
 		await client.session.load()
@@ -570,7 +570,7 @@ describe('origin guard', () => {
 			async request => {
 				seen = request
 				return echo(request)
-			}
+			},
 		)
 
 		expect(seen?.headers.get('authorization')).toBe('Bearer Ada')
@@ -613,7 +613,7 @@ describe('the reload timer', () => {
 			session({
 				adapter: { load, expiresAt: () => expiresAt },
 				refreshLeeway: 60_000,
-			})
+			}),
 		)
 
 		expect(load).not.toHaveBeenCalled()
@@ -632,7 +632,7 @@ describe('the reload timer', () => {
 			session({
 				adapter: { load, expiresAt: () => expiresAt },
 				refreshLeeway: 60_000,
-			})
+			}),
 		)
 
 		await client.session.load()
@@ -655,7 +655,7 @@ describe('the reload timer', () => {
 			session({
 				adapter: { load, expiresAt: () => expiresAt },
 				refreshLeeway: 60_000,
-			})
+			}),
 		)
 
 		await client.session.load()
@@ -676,7 +676,7 @@ describe('the reload timer', () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
 			session({
 				adapter: { load, expiresAt: () => start - 5_000 },
-			})
+			}),
 		)
 
 		await client.session.load()
@@ -694,7 +694,7 @@ describe('identity', () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch })
 			.with(cache())
 			.with(
-				session({ adapter: { load: async () => ({ name }), identify: user => user.name } })
+				session({ adapter: { load: async () => ({ name }), identify: user => user.name } }),
 			)
 
 		await client.get('/shared')
@@ -714,7 +714,7 @@ describe('identity', () => {
 			.with(
 				session({
 					adapter: { load: async () => ({ name: 'Ada' }), identify: user => user.name },
-				})
+				}),
 			)
 
 		await client.get('/shared')
@@ -780,7 +780,7 @@ describe('terminal failure', () => {
 			fetch: () => {
 				calls++
 				return Promise.resolve(
-					signedOut ? jsonResponse({}, 401) : jsonResponse({ ok: true })
+					signedOut ? jsonResponse({}, 401) : jsonResponse({ ok: true }),
 				)
 			},
 		}).with(session({ adapter: { load: async () => (signedOut ? null : { name: 'Ada' }) } }))
@@ -817,7 +817,7 @@ describe('shared recovery flight', () => {
 			() =>
 				new Promise<{ name: string } | null>(resolve => {
 					releaseLoad = resolve
-				})
+				}),
 		)
 		const renew = vi.fn(async () => true)
 
@@ -855,7 +855,7 @@ describe('shared recovery flight', () => {
 			() =>
 				new Promise<boolean>(resolve => {
 					releaseRenew = () => resolve(true)
-				})
+				}),
 		)
 
 		let authorised = false
@@ -866,7 +866,7 @@ describe('shared recovery flight', () => {
 			session({
 				adapter: { load, renew, expiresAt: user => user.exp },
 				refreshLeeway: 60_000,
-			})
+			}),
 		)
 
 		await client.session.load()
@@ -898,7 +898,7 @@ describe('teardown', () => {
 					load: async () => ({ name: 'Ada', exp: Date.now() + 60_000 }),
 					expiresAt: (user: { exp: number }) => user.exp,
 				},
-			})
+			}),
 		)
 
 		await client.session.load()
