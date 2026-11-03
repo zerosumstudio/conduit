@@ -6,7 +6,7 @@ import { appendQuery, applyPathParams, buildUrl, isAbsoluteUrl, joinUrl, stripQu
 describe('applyPathParams', () => {
 	it('substitutes and encodes placeholders', () => {
 		expect(applyPathParams('/users/:id/posts/:slug', { id: 7, slug: 'a b/c' })).toBe(
-			'/users/7/posts/a%20b%2Fc'
+			'/users/7/posts/a%20b%2Fc',
 		)
 	})
 
@@ -29,7 +29,7 @@ describe('applyPathParams', () => {
 
 	it('does not resolve a name through Object.prototype instead of failing', () => {
 		expect(() => applyPathParams('/users/:constructor', {})).toThrow(
-			/needs a value for ":constructor"/
+			/needs a value for ":constructor"/,
 		)
 	})
 
@@ -115,7 +115,7 @@ describe('joinUrl', () => {
 
 	it('allows a foreign origin once it is on the allowlist', () => {
 		expect(joinUrl('/api', 'https://other.test/x', ['https://other.test'])).toBe(
-			'https://other.test/x'
+			'https://other.test/x',
 		)
 	})
 
@@ -128,7 +128,7 @@ describe('joinUrl', () => {
 		expect(() => joinUrl('/api', '//other.test/x')).toThrow(ConduitError)
 		expect(() => joinUrl('/api', '//other.test/x')).toThrow(/protocol-relative/)
 		expect(() => joinUrl('/api', '//other.test/x', ['https://other.test'])).toThrow(
-			/protocol-relative/
+			/protocol-relative/,
 		)
 	})
 
@@ -157,19 +157,19 @@ describe('isAbsoluteUrl', () => {
 describe('buildUrl', () => {
 	it('applies params, joins and appends query in order', () => {
 		expect(buildUrl('/api', '/users/:id', { id: 3 }, { expand: 'posts' })).toBe(
-			'/api/users/3?expand=posts'
+			'/api/users/3?expand=posts',
 		)
 	})
 
 	it('rejects a foreign origin before the query is even considered', () => {
 		expect(() => buildUrl('/api', 'https://other.test/x', undefined, { a: 1 })).toThrow(
-			ConduitError
+			ConduitError,
 		)
 	})
 
 	it('honours the allowlist passed through from the client', () => {
 		expect(
-			buildUrl('/api', 'https://other.test/x', undefined, undefined, ['https://other.test'])
+			buildUrl('/api', 'https://other.test/x', undefined, undefined, ['https://other.test']),
 		).toBe('https://other.test/x')
 	})
 })

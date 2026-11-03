@@ -39,7 +39,7 @@ describe('deriveVariance', () => {
 			{ 'x-tenant': 'acme', accept: 'application/json' },
 			{ authorization: 'Bearer abc' },
 			'*',
-			'include'
+			'include',
 		)
 	})
 })
@@ -62,7 +62,7 @@ describe('dispatch', () => {
 	const shallow = compose([passthrough], terminal)
 	const deep = compose(
 		Array.from({ length: 8 }, () => passthrough),
-		terminal
+		terminal,
 	)
 
 	bench('1 layer', async () => {

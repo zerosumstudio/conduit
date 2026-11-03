@@ -1,5 +1,8 @@
-# Conduit
+# <picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/zerosumstudio/conduit/main/.github/assets/zerosum-on-dark.png"><img src="https://raw.githubusercontent.com/zerosumstudio/conduit/main/.github/assets/zerosum-on-light.png" alt="" height="32"></picture> Conduit
 
+[![npm version](https://badge.fury.io/js/@zerosumstudio%2Fconduit.svg)](https://badge.fury.io/js/@zerosumstudio%2Fconduit)
+[![Release](https://github.com/zerosumstudio/conduit/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/zerosumstudio/conduit/actions/workflows/release.yml)
+[![codecov](https://codecov.io/gh/zerosumstudio/conduit/branch/main/graph/badge.svg)](https://codecov.io/gh/zerosumstudio/conduit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A data-fetching client for micro frontends. One client is shared by every bundle on the page, so four remotes asking for the same thing make one request, read one cache, and share one session. Sharing goes through a global registry rather than any framework's provider, so it works the same whichever framework each bundle is built with, and whether they match or not.
@@ -10,7 +13,9 @@ A data-fetching client for micro frontends. One client is shared by every bundle
 pnpm add @zerosumstudio/conduit
 ```
 
-Up to 2.0.0 this was published as `@bkincz/conduit`. Swap the package name and the imports, the API is the same.
+Requires Node 22.12 or newer. React 18+ is an optional peer, needed only for `@zerosumstudio/conduit/react`.
+
+Up to 2.0.0 this was published as `@bkincz/conduit`. Swap the package name and the imports, the API is the same. If you augment its types with `declare module '@zerosumstudio/conduit'`, update that module name too.
 
 ## Quick start
 
@@ -26,7 +31,7 @@ const user = await api.get<User>('/users/:id', { params: { id: 7 } })
 await api.post('/users', { name: 'Ada' })
 ```
 
-`defaults()` installs the standard stack in the order the layers need to be in. Reach for `.with()` only when you want something it cannot express.
+`defaults()` installs the standard stack in the order the layers need to be in. Reach for `.with()` only when you want something it cannot express. `session` is installed only when you pass it, and `retry: false` or `timeout: false` leaves those two out.
 
 ```
 observable → cache → dedupe → session → retry → queue → timeout → transport
@@ -162,16 +167,16 @@ It runs through the same middleware stack as any other request, so session, retr
 
 Each one is middleware that can also extend the client, and the extension shows up in the type. `api.invalidate()` does not compile until `cache()` is installed.
 
-| Plugin       | Adds to the client                                     | What it does                                                                   |
-| ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `cache`      | `invalidate`, `invalidateTag`, `clearCache`, `setData` | LRU with TTL, optional stale-while-revalidate, tag invalidation                |
-| `dedupe`     | `inFlight`                                             | One request per key. Unmounting cancels your wait, not everyone else's         |
-| `session`    | `session`                                              | One session for the page, single-flight recovery, behind an adapter            |
-| `retry`      |                                                        | Backoff with jitter, honours `Retry-After`, idempotent methods only by default |
-| `queue`      | `queueDepth`, `activeRequests`                         | Bounded concurrency with priority lanes                                        |
-| `timeout`    |                                                        | Per client or per request, fails with code `TIMEOUT`                           |
-| `observable` | `observe`, `observedKeys`                              | Per key state for framework bindings                                           |
-| `contract`   |                                                        | Reports once when this bundle and the API disagree on version                  |
+| Plugin       | Adds to the client                                                  | What it does                                                                                      |
+| ------------ | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `cache`      | `invalidate`, `invalidateTag`, `clearCache`, `cacheSize`, `setData` | LRU with a 30 s TTL and 200 entries by default, optional stale-while-revalidate, tag invalidation |
+| `dedupe`     | `inFlight`                                                          | One request per key. Unmounting cancels your wait, not everyone else's                            |
+| `session`    | `session`                                                           | One session for the page, single-flight recovery, behind an adapter                               |
+| `retry`      |                                                                     | Backoff with jitter, honours `Retry-After`, 3 attempts, idempotent methods only by default        |
+| `queue`      | `queueDepth`, `activeRequests`                                      | Bounded concurrency (6 by default) with priority lanes                                            |
+| `timeout`    |                                                                     | Per client or per request, 15 s by default, fails with code `TIMEOUT`                             |
+| `observable` | `observe`, `observedKeys`                                           | Per key state for framework bindings                                                              |
+| `contract`   |                                                                     | Reports once when this bundle and the API disagree on version. Not in `defaults()`                |
 
 Any request can step around a layer:
 
@@ -214,16 +219,17 @@ api.session.subscribe(state => render(state))
 await api.session.load()
 ```
 
-| Adapter method | Called                                                                                  |
-| -------------- | --------------------------------------------------------------------------------------- |
-| `load`         | To read the session, on first use and shortly before `expiresAt`                        |
-| `authorize`    | On every request to the API origin, or to `session({ origins })`, never elsewhere       |
-| `renew`        | Once per 401, however many requests hit it together                                     |
-| `expiresAt`    | To schedule the next `load`                                                             |
-| `identify`     | After every `load` and `renew`; a changed value resets cache, dedupe and observed state |
-| `onClear`      | From `session.clear()` and when recovery fails for good                                 |
+| Adapter method      | Called                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `load`              | To read the session, on first use and shortly before `expiresAt`                        |
+| `authorize`         | On every request to the API origin, or to `session({ origins })`, never elsewhere       |
+| `renew`             | Once per 401, however many requests hit it together                                     |
+| `expiresAt`         | To schedule the next `load`                                                             |
+| `identify`          | After every `load` and `renew`; a changed value resets cache, dedupe and observed state |
+| `isUnauthenticated` | Optional. Decides whether a failure means the session is at fault. Defaults to HTTP 401 |
+| `onClear`           | From `session.clear()` and when recovery fails for good                                 |
 
-`status` is `unknown`, `loading`, `authenticated`, `anonymous`, or `error`. `error` means `load` failed for a reason other than authentication; the previous session is kept and `error` says why. Four remotes hitting a 401 together produce one recovery, not four. When it cannot be recovered, everything in flight is aborted, cached responses are dropped, `onUnauthenticated` fires once, the session's `error.code` is `UNAUTHENTICATED`, and requests that need credentials fail with that code until a later `load()` succeeds.
+The plugin also takes `onUnauthenticated`, `eager` to read the session on install (default `false`), `refreshLeeway` for how long before `expiresAt` to re-read (default 60 s) and `origins`. `status` is `unknown`, `loading`, `authenticated`, `anonymous`, or `error`. `error` means `load` failed for a reason other than authentication; the previous session is kept and `error` says why. Four remotes hitting a 401 together produce one recovery, not four. When it cannot be recovered, everything in flight is aborted, cached responses are dropped, `onUnauthenticated` fires once, the session's `error.code` is `UNAUTHENTICATED`, and requests that need credentials fail with that code until a later `load()` succeeds.
 
 ## One client across bundles
 
@@ -233,11 +239,11 @@ Each federated bundle gets its own module instance, so a client built in the hos
 export const api = sharedClient(
 	'app.api',
 	() => defaults(createClient({ baseUrl: '/api' })),
-	{ contract: 'v1', version: 1 } // warns when bundles disagree
+	{ contract: 'v1', version: 1 }, // warns when bundles disagree
 )
 ```
 
-The first caller builds it and everyone else gets that same instance. A later caller's factory never runs, which is what `contract` and `version` are there to warn you about.
+The first caller builds it and everyone else gets that same instance. A later caller's factory never runs, which is what `contract` and `version` are there to warn you about. Pass `onMismatch` to route those warnings somewhere other than the console.
 
 Tearing one down means deregistering it too, or the next bundle to ask gets the dead one:
 
@@ -261,7 +267,7 @@ export const api = sharedClient('app.api', () => defaults(createClient({ baseUrl
 ```ts
 // api.ts
 export const api = sharedClient('app.api', () =>
-	defaults(createClient({ baseUrl: '/api' }), { session: { adapter } })
+	defaults(createClient({ baseUrl: '/api' }), { session: { adapter } }),
 )
 
 export const { useRequest, useMutation, usePrefetch, useSession } = createHooks(api)
@@ -318,7 +324,7 @@ Endpoints work everywhere a path does: `useRequest(getUser, { id })` and `useMut
 function NewUser() {
 	const { mutate, isPending, error } = useMutation<User, { name: string }>(
 		variables => api.post<User>('/users', variables),
-		{ invalidates: ['users'] }
+		{ invalidates: ['users'] },
 	)
 
 	const message = isConduitError(error) ? error.message : undefined
@@ -415,9 +421,22 @@ server.get('/down', networkError())
 const api = defaults(createClient({ baseUrl: '/api', fetch: server.fetch }))
 ```
 
-Unmatched requests fail where they were made and name what is registered. `server.calls` has everything that arrived, and `server.reset()` clears routes and calls.
+Unmatched requests fail where they were made and name what is registered, unless you pass `onUnmatched: 'notFound'` to `createMockServer`. `server.calls` has everything that arrived, and `server.reset()` clears routes and calls.
 
 Testing the hooks while conduit is linked from a sibling checkout (`link:` or `pnpm link`) needs `resolve.dedupe: ['react', 'react-dom']` in the consumer's vite or vitest config, or React resolves twice and every hook call fails.
+
+## Size
+
+Minified and brotli compressed, including dependencies.
+
+| Import                                            | Size     |
+| ------------------------------------------------- | -------- |
+| `{ createClient }` only                           | ~6.0 KB  |
+| Core with cache, dedupe, retry, timeout and queue | ~9.5 KB  |
+| Everything                                        | ~11.7 KB |
+| React bindings (`/react`)                         | ~2.0 KB  |
+| Devtools (`/devtools`)                            | ~0.9 KB  |
+| Testing (`/testing`)                              | ~1.1 KB  |
 
 ## License
 

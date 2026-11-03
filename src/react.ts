@@ -65,15 +65,15 @@ export interface Hooks {
 	useRequest<Vars, Result>(
 		endpoint: Endpoint<Vars, Result>,
 		vars: Vars,
-		options?: UseRequestOptions
+		options?: UseRequestOptions,
 	): UseRequestResult<Result>
 	useMutation<T = unknown, V = void>(
 		run: (variables: V) => PromiseLike<T>,
-		options?: UseMutationOptions<V>
+		options?: UseMutationOptions<V>,
 	): UseMutationResult<T, V>
 	useMutation<Vars, Result>(
 		endpoint: Endpoint<Vars, Result>,
-		options?: UseMutationOptions<Vars>
+		options?: UseMutationOptions<Vars>,
 	): UseMutationResult<Result, Vars>
 	/** Returns a warm-the-cache function that runs in the prefetch lane. */
 	usePrefetch(): (path: string, options?: MethodOptions) => void
@@ -124,14 +124,14 @@ interface PreviousSnapshot<T> {
 function useRequestCore<T>(
 	client: ObservableApi,
 	descriptor: RequestDescriptor,
-	config: { keepPreviousData: boolean; refetchOnFocus: boolean; refetchOnReconnect: boolean }
+	config: { keepPreviousData: boolean; refetchOnFocus: boolean; refetchOnReconnect: boolean },
 ): UseRequestResult<T> {
 	const { key, enabled, run } = descriptor
 	const { keepPreviousData, refetchOnFocus, refetchOnReconnect } = config
 
 	const store = useMemo(
 		() => (key === undefined ? undefined : client.observe<T>(key)),
-		[client, key]
+		[client, key],
 	)
 	const activeStore = (store ?? disabledStore) as ReadableStore<QueryState<T>>
 	const state = useSyncExternalStore(activeStore.subscribe, activeStore.get, activeStore.get)
@@ -157,7 +157,7 @@ function useRequestCore<T>(
 
 			await latestRun.current({ signal: controller.signal, refresh })
 		},
-		[key]
+		[key],
 	)
 
 	const refetch = useCallback((): Promise<void> => execute(true), [execute])
@@ -267,7 +267,7 @@ function useRequestCore<T>(
 function invalidateTags(
 	client: Partial<CacheApi>,
 	tags: readonly string[] | ((variables: unknown) => readonly string[]) | undefined,
-	variables: unknown
+	variables: unknown,
 ): void {
 	const resolved = resolveEndpointTags(tags, variables)
 
@@ -292,11 +292,11 @@ function invalidateTags(
  * ```
  */
 export function createHooks<S>(
-	client: Client & ObservableApi & SessionApi<S>
+	client: Client & ObservableApi & SessionApi<S>,
 ): Hooks & SessionHooks<S>
 export function createHooks(client: Client & ObservableApi): Hooks
 export function createHooks(
-	client: Client & ObservableApi & Partial<SessionApi<unknown>> & Partial<CacheApi>
+	client: Client & ObservableApi & Partial<SessionApi<unknown>> & Partial<CacheApi>,
 ): Hooks & Partial<SessionHooks<unknown>> {
 	/*
 	 * REQUEST — path form
@@ -335,7 +335,7 @@ export function createHooks(
 
 			if (client.keyFor(path, request) !== key) {
 				console.warn(
-					`[conduit] useRequest("${path}") derived two different keys in one render, so the client's headers function answers differently per call — a rotating token, a request id, a trace parent. Under vary: '*' that makes every request unique: nothing hits the cache, nothing shares a flight, and this hook refetches on every render. Narrow vary to the headers that matter (vary: ['authorization']), or keep per-call headers out of the client's headers function.`
+					`[conduit] useRequest("${path}") derived two different keys in one render, so the client's headers function answers differently per call — a rotating token, a request id, a trace parent. Under vary: '*' that makes every request unique: nothing hits the cache, nothing shares a flight, and this hook refetches on every render. Narrow vary to the headers that matter (vary: ['authorization']), or keep per-call headers out of the client's headers function.`,
 				)
 			}
 		}, [client, path, request, key])
@@ -370,7 +370,7 @@ export function createHooks(
 					}
 				},
 			}),
-			[path, key, enabled]
+			[path, key, enabled],
 		)
 
 		return useRequestCore<T>(client, descriptor, {
@@ -386,7 +386,7 @@ export function createHooks(
 	function useRequestByEndpoint<Vars, Result>(
 		endpoint: Endpoint<Vars, Result>,
 		vars: Vars,
-		options: UseRequestOptions
+		options: UseRequestOptions,
 	): UseRequestResult<Result> {
 		const {
 			enabled = true,
@@ -442,7 +442,7 @@ export function createHooks(
 					}
 				},
 			}),
-			[endpoint, key, enabled]
+			[endpoint, key, enabled],
 		)
 
 		return useRequestCore<Result>(client, descriptor, {
@@ -456,12 +456,12 @@ export function createHooks(
 	function useRequest<Vars, Result>(
 		endpoint: Endpoint<Vars, Result>,
 		vars: Vars,
-		options?: UseRequestOptions
+		options?: UseRequestOptions,
 	): UseRequestResult<Result>
 	function useRequest(
 		pathOrEndpoint: string | Endpoint<unknown, unknown>,
 		varsOrOptions?: unknown,
-		maybeOptions?: UseRequestOptions
+		maybeOptions?: UseRequestOptions,
 	): UseRequestResult<unknown> {
 		if (typeof pathOrEndpoint === 'string') {
 			return useRequestByPath(pathOrEndpoint, (varsOrOptions as UseRequestOptions) ?? {})
@@ -475,15 +475,15 @@ export function createHooks(
 	 */
 	function useMutation<T, V>(
 		run: (variables: V) => PromiseLike<T>,
-		options?: UseMutationOptions<V>
+		options?: UseMutationOptions<V>,
 	): UseMutationResult<T, V>
 	function useMutation<Vars, Result>(
 		endpoint: Endpoint<Vars, Result>,
-		options?: UseMutationOptions<Vars>
+		options?: UseMutationOptions<Vars>,
 	): UseMutationResult<Result, Vars>
 	function useMutation(
 		runOrEndpoint: ((variables: unknown) => PromiseLike<unknown>) | Endpoint<unknown, unknown>,
-		options?: UseMutationOptions<unknown>
+		options?: UseMutationOptions<unknown>,
 	): UseMutationResult<unknown, unknown> {
 		const isEndpoint = typeof runOrEndpoint !== 'function'
 
@@ -529,7 +529,7 @@ export function createHooks(
 						invalidateTags(
 							client,
 							(current as Endpoint<unknown, unknown>).invalidates,
-							variables
+							variables,
 						)
 					}
 					invalidateTags(client, latestOptions.current?.invalidates, variables)
@@ -543,7 +543,7 @@ export function createHooks(
 					return undefined
 				}
 			},
-			[isEndpoint]
+			[isEndpoint],
 		)
 
 		const reset = useCallback(() => {
@@ -570,7 +570,7 @@ export function createHooks(
 
 		if (handle === undefined) {
 			throw new Error(
-				'useSession needs the session plugin. Install it with .with(session({ adapter })), or via defaults(client, { session }).'
+				'useSession needs the session plugin. Install it with .with(session({ adapter })), or via defaults(client, { session }).',
 			)
 		}
 

@@ -95,7 +95,7 @@ function isSpent(client: unknown): boolean {
 export function sharedClient<C>(
 	key: string,
 	factory: () => C,
-	options: SharedClientOptions = {}
+	options: SharedClientOptions = {},
 ): C {
 	const logger = options.logger ?? consoleLogger
 	const entries = registry()
@@ -108,7 +108,7 @@ export function sharedClient<C>(
 
 	if (existing !== undefined) {
 		logger.warn(
-			`[conduit] Shared client "${key}" had been destroyed, so a replacement was built. Whoever calls destroy() on a shared client should call releaseSharedClient("${key}") too.`
+			`[conduit] Shared client "${key}" had been destroyed, so a replacement was built. Whoever calls destroy() on a shared client should call releaseSharedClient("${key}") too.`,
 		)
 	}
 
@@ -157,7 +157,7 @@ function reconcile(key: string, existing: SharedEntry, options: SharedClientOpti
 		kind: SharedMismatchKind,
 		from: string | number | undefined,
 		to: string | number | undefined,
-		message: string
+		message: string,
 	): void => {
 		const mismatch: SharedMismatch = { key, kind, existing: from, joining: to, message }
 
@@ -174,7 +174,7 @@ function reconcile(key: string, existing: SharedEntry, options: SharedClientOpti
 			'conduit-version',
 			existing.conduitVersion,
 			CONDUIT_VERSION,
-			`Shared client "${key}" was created by conduit ${existing.conduitVersion}, but this bundle ships conduit ${CONDUIT_VERSION}. They can disagree about cache and session shape. Align conduit versions across your apps, or share @zerosumstudio/conduit as a singleton in your module federation config.`
+			`Shared client "${key}" was created by conduit ${existing.conduitVersion}, but this bundle ships conduit ${CONDUIT_VERSION}. They can disagree about cache and session shape. Align conduit versions across your apps, or share @zerosumstudio/conduit as a singleton in your module federation config.`,
 		)
 	}
 
@@ -183,7 +183,7 @@ function reconcile(key: string, existing: SharedEntry, options: SharedClientOpti
 			'contract',
 			existing.contract,
 			options.contract,
-			`Shared client "${key}" was created against API contract ${String(existing.contract)}, but this bundle was built against ${String(options.contract)}. One of your apps is deployed against a different version of the API.`
+			`Shared client "${key}" was created against API contract ${String(existing.contract)}, but this bundle was built against ${String(options.contract)}. One of your apps is deployed against a different version of the API.`,
 		)
 	}
 
@@ -192,7 +192,7 @@ function reconcile(key: string, existing: SharedEntry, options: SharedClientOpti
 			'client-version',
 			existing.version,
 			options.version,
-			`Shared client "${key}" is version ${String(existing.version)}, but this bundle expects version ${options.version}. The existing client stays in use — it cannot be swapped while other apps hold references to it. Deploy these apps together.`
+			`Shared client "${key}" is version ${String(existing.version)}, but this bundle expects version ${options.version}. The existing client stays in use — it cannot be swapped while other apps hold references to it. Deploy these apps together.`,
 		)
 	}
 }

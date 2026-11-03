@@ -1,40 +1,7 @@
 {
 	"name": "@zerosumstudio/conduit",
 	"version": "2.0.0",
-	"description": "Data-fetching client for micro frontends: one shared client across every bundle on the page",
-	"type": "module",
-	"main": "./dist/index.cjs",
-	"module": "./dist/index.js",
-	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js",
-			"require": "./dist/index.cjs"
-		},
-		"./react": {
-			"types": "./dist/react.d.ts",
-			"import": "./dist/react.js",
-			"require": "./dist/react.cjs"
-		},
-		"./devtools": {
-			"types": "./dist/devtools.d.ts",
-			"import": "./dist/devtools.js",
-			"require": "./dist/devtools.cjs"
-		},
-		"./testing": {
-			"types": "./dist/testing.d.ts",
-			"import": "./dist/testing.js",
-			"require": "./dist/testing.cjs"
-		},
-		"./package.json": "./package.json"
-	},
-	"sideEffects": false,
-	"files": [
-		"dist",
-		"README.md",
-		"LICENSE"
-	],
+	"description": "A data-fetching client for micro frontends",
 	"keywords": [
 		"micro-frontends",
 		"module-federation",
@@ -46,40 +13,85 @@
 		"abort",
 		"typescript"
 	],
-	"author": "zerosum studio <hello@zerosum.studio>",
-	"license": "MIT",
+	"homepage": "https://github.com/zerosumstudio/conduit#readme",
+	"bugs": {
+		"url": "https://github.com/zerosumstudio/conduit/issues"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/zerosumstudio/conduit.git"
 	},
-	"bugs": {
-		"url": "https://github.com/zerosumstudio/conduit/issues"
+	"license": "MIT",
+	"author": "zerosum studio <hello@zerosum.studio>",
+	"sideEffects": false,
+	"type": "module",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		},
+		"./react": {
+			"import": {
+				"types": "./dist/react.d.ts",
+				"default": "./dist/react.js"
+			},
+			"require": {
+				"types": "./dist/react.d.cts",
+				"default": "./dist/react.cjs"
+			}
+		},
+		"./devtools": {
+			"import": {
+				"types": "./dist/devtools.d.ts",
+				"default": "./dist/devtools.js"
+			},
+			"require": {
+				"types": "./dist/devtools.d.cts",
+				"default": "./dist/devtools.cjs"
+			}
+		},
+		"./testing": {
+			"import": {
+				"types": "./dist/testing.d.ts",
+				"default": "./dist/testing.js"
+			},
+			"require": {
+				"types": "./dist/testing.d.cts",
+				"default": "./dist/testing.cjs"
+			}
+		},
+		"./package.json": "./package.json"
 	},
-	"homepage": "https://github.com/zerosumstudio/conduit#readme",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
 	"scripts": {
+		"bench": "vitest bench --run",
 		"build": "tsup",
+		"check:api": "tsc -p tsconfig.public-api.json --noEmit",
 		"dev": "tsup --watch",
-		"type-check": "tsc --noEmit && tsc -p tsconfig.tools.json --noEmit",
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix",
-		"format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
-		"format:check": "prettier --check \"**/*.{ts,tsx,js,json,md}\"",
-		"test": "vitest",
-		"test:run": "vitest run",
-		"test:coverage": "vitest run --coverage",
-		"bench": "vitest bench --run",
+		"prepublishOnly": "pnpm run verify",
 		"size": "size-limit",
-		"check:api": "tsc -p tsconfig.public-api.json --noEmit",
-		"verify": "pnpm run type-check && pnpm run lint && pnpm run test:coverage && pnpm run build && pnpm run check:api && pnpm run size",
-		"prepublishOnly": "pnpm run verify"
-	},
-	"peerDependencies": {
-		"react": ">=18.0.0"
-	},
-	"peerDependenciesMeta": {
-		"react": {
-			"optional": true
-		}
+		"test": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"test:run": "vitest run",
+		"type-check": "tsc --noEmit && tsc -p tsconfig.tools.json --noEmit",
+		"verify": "pnpm run type-check && pnpm run lint && pnpm run format:check && pnpm run test:coverage && pnpm run build && pnpm run check:api && pnpm run size"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
@@ -101,6 +113,22 @@
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.66.0",
 		"vitest": "^4.1.10"
+	},
+	"peerDependencies": {
+		"react": ">=18.0.0"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		}
+	},
+	"packageManager": "pnpm@11.6.0",
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
 	},
 	"size-limit": [
 		{
@@ -141,13 +169,5 @@
 			"path": "dist/testing.js",
 			"limit": "2 KB"
 		}
-	],
-	"publishConfig": {
-		"access": "public",
-		"provenance": true
-	},
-	"engines": {
-		"node": ">=22.12.0"
-	},
-	"packageManager": "pnpm@11.6.0"
+	]
 }

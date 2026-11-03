@@ -14,7 +14,7 @@ const key = (
 	method: HttpMethod,
 	url: string,
 	body: BodyInit | null = null,
-	variance = ''
+	variance = '',
 ): string => deriveKey({ method, url, body, variance })
 
 describe('fnv1a', () => {
@@ -64,7 +64,7 @@ describe('bodyFingerprint', () => {
 
 	it('hashes URLSearchParams by value', () => {
 		expect(bodyFingerprint(new URLSearchParams('a=1'))).toBe(
-			bodyFingerprint(new URLSearchParams('a=1'))
+			bodyFingerprint(new URLSearchParams('a=1')),
 		)
 	})
 
@@ -84,13 +84,13 @@ describe('fingerprintHeaders', () => {
 
 	it('distinguishes different values of the same header', () => {
 		expect(fingerprintHeaders({ authorization: 'a' }, undefined, '*')).not.toBe(
-			fingerprintHeaders({ authorization: 'b' }, undefined, '*')
+			fingerprintHeaders({ authorization: 'b' }, undefined, '*'),
 		)
 	})
 
 	it('ignores header order and casing', () => {
 		expect(fingerprintHeaders({ A: '1', b: '2' }, undefined, '*')).toBe(
-			fingerprintHeaders({ B: '2', a: '1' }, undefined, '*')
+			fingerprintHeaders({ B: '2', a: '1' }, undefined, '*'),
 		)
 	})
 
@@ -99,13 +99,13 @@ describe('fingerprintHeaders', () => {
 
 		expect(fingerprintHeaders([['x-tenant', 'acme']], undefined, '*')).toBe(expected)
 		expect(fingerprintHeaders(new Headers({ 'x-tenant': 'acme' }), undefined, '*')).toBe(
-			expected
+			expected,
 		)
 	})
 
 	it('lets request headers override client headers, as the merge does', () => {
 		expect(fingerprintHeaders({ 'x-tenant': 'a' }, { 'x-tenant': 'b' }, '*')).toBe(
-			fingerprintHeaders(undefined, { 'x-tenant': 'b' }, '*')
+			fingerprintHeaders(undefined, { 'x-tenant': 'b' }, '*'),
 		)
 	})
 
@@ -113,7 +113,7 @@ describe('fingerprintHeaders', () => {
 		expect(fingerprintHeaders({ 'x-trace': '1' }, undefined, ['authorization'])).toBe('')
 		expect(fingerprintHeaders({ 'x-trace': '1' }, undefined, [])).toBe('')
 		expect(fingerprintHeaders({ authorization: 'a' }, undefined, ['Authorization'])).not.toBe(
-			''
+			'',
 		)
 	})
 })
@@ -125,7 +125,7 @@ describe('deriveVariance', () => {
 
 	it('separates credential modes, which decide whether a cookie rides along', () => {
 		expect(deriveVariance(undefined, undefined, '*', 'include')).not.toBe(
-			deriveVariance(undefined, undefined, '*', 'omit')
+			deriveVariance(undefined, undefined, '*', 'omit'),
 		)
 	})
 })

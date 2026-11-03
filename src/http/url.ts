@@ -16,7 +16,7 @@ const PARAM_PATTERN = /(^|\/)(::?)([A-Za-z_][A-Za-z0-9_]*)/g
 export function applyPathParams(
 	path: string,
 	params: PathParams | undefined,
-	logger: ConduitLogger = consoleLogger
+	logger: ConduitLogger = consoleLogger,
 ): string {
 	const mark = path.indexOf('?')
 	const head = mark === -1 ? path : path.slice(0, mark)
@@ -27,7 +27,7 @@ export function applyPathParams(
 	if (!PARAM_PATTERN.test(head)) {
 		if (DEV && params !== undefined && Object.keys(params).length > 0) {
 			logger.warn(
-				`[conduit] "${path}" was given params ${JSON.stringify(Object.keys(params))} but contains no ":name" placeholders. Did you mean to pass them as "query"?`
+				`[conduit] "${path}" was given params ${JSON.stringify(Object.keys(params))} but contains no ":name" placeholders. Did you mean to pass them as "query"?`,
 			)
 		}
 
@@ -65,7 +65,7 @@ export function applyPathParams(
 			}
 
 			return `${prefix}${encodeURIComponent(text)}`
-		}
+		},
 	)
 
 	return substituted + tail
@@ -166,7 +166,7 @@ function assertAllowedOrigin(url: string, baseUrl: string, origins: readonly str
 export function joinUrl(
 	baseUrl: string,
 	path: string,
-	origins: readonly string[] = NO_ORIGINS
+	origins: readonly string[] = NO_ORIGINS,
 ): string {
 	if (path.startsWith('//')) {
 		throw new ConduitError({
@@ -201,7 +201,7 @@ export function buildUrl(
 	params: PathParams | undefined,
 	query: Query | undefined,
 	origins: readonly string[] = NO_ORIGINS,
-	logger: ConduitLogger = consoleLogger
+	logger: ConduitLogger = consoleLogger,
 ): string {
 	return appendQuery(joinUrl(baseUrl, applyPathParams(path, params, logger), origins), query)
 }

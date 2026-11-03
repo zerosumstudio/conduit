@@ -149,7 +149,7 @@ describe('dedupe', () => {
 	it('honours a custom sharing rule', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch }).with(
-			dedupe({ shouldDedupe: request => request.method === 'POST' })
+			dedupe({ shouldDedupe: request => request.method === 'POST' }),
 		)
 
 		await Promise.all([client.post('/things', { a: 1 }), client.post('/things', { a: 1 })])

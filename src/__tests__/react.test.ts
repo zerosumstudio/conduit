@@ -50,7 +50,7 @@ describe('useRequest', () => {
 			createClient({ fetch: () => Promise.resolve(jsonResponse({}, 500)) }),
 			{
 				retry: false,
-			}
+			},
 		)
 		const { useRequest } = createHooks(api)
 
@@ -67,7 +67,7 @@ describe('useRequest', () => {
 
 		const { result, rerender } = renderHook(
 			({ enabled }: { enabled: boolean }) => useRequest('/me', { enabled }),
-			{ initialProps: { enabled: false } }
+			{ initialProps: { enabled: false } },
 		)
 
 		expect(stub.calls).toHaveLength(0)
@@ -87,7 +87,7 @@ describe('useRequest', () => {
 			({ id }: { id: number }) => useRequest('/users/:id', { params: { id } }),
 			{
 				initialProps: { id: 1 },
-			}
+			},
 		)
 
 		await waitFor(() => expect(stub.calls).toHaveLength(1))
@@ -132,7 +132,7 @@ describe('useRequest', () => {
 			createClient({
 				fetch: stubFetch(ok).fetch,
 				headers: () => ({ 'x-request-id': String(++nonce) }),
-			})
+			}),
 		)
 		const { useRequest } = createHooks(api)
 
@@ -148,7 +148,7 @@ describe('useRequest', () => {
 			createClient({
 				fetch: stubFetch(ok).fetch,
 				headers: () => ({ authorization: 'Bearer steady' }),
-			})
+			}),
 		)
 		const { useRequest } = createHooks(api)
 
@@ -285,7 +285,7 @@ describe('useRequest', () => {
 		const { useRequest } = createHooks(api)
 
 		const { result } = renderHook(() =>
-			useRequest<{ version: number }>('/me', { tags: ['me'] })
+			useRequest<{ version: number }>('/me', { tags: ['me'] }),
 		)
 
 		await waitFor(() => expect(result.current.data).toEqual({ version: 1 }))
@@ -309,7 +309,7 @@ describe('useRequest', () => {
 					params: { id },
 					keepPreviousData: true,
 				}),
-			{ initialProps: { id: 1 } }
+			{ initialProps: { id: 1 } },
 		)
 
 		deferred.resolve(jsonResponse({ id: 1 }))
@@ -424,8 +424,8 @@ describe('useMutation', () => {
 
 		const { result } = renderHook(() =>
 			useMutation<{ id: number }, { name: string }>(variables =>
-				api.post('/users', variables)
-			)
+				api.post('/users', variables),
+			),
 		)
 
 		expect(result.current.isPending).toBe(false)
@@ -443,7 +443,7 @@ describe('useMutation', () => {
 		const { useMutation } = createHooks(api)
 
 		const { result } = renderHook(() =>
-			useMutation<unknown, void>(() => api.post('/users', {}))
+			useMutation<unknown, void>(() => api.post('/users', {})),
 		)
 
 		await act(async () => {
@@ -458,7 +458,7 @@ describe('useMutation', () => {
 		const { useMutation } = createHooks(api)
 
 		const { result } = renderHook(() =>
-			useMutation<unknown, void>(() => api.post('/users', {}))
+			useMutation<unknown, void>(() => api.post('/users', {})),
 		)
 
 		await act(async () => {
@@ -485,7 +485,7 @@ describe('useMutation', () => {
 		await waitFor(() => expect(query.result.current.data).toEqual({ version: 1 }))
 
 		const mutation = renderHook(() =>
-			useMutation<unknown, void>(() => api.post('/touch', {}), { invalidates: ['me'] })
+			useMutation<unknown, void>(() => api.post('/touch', {}), { invalidates: ['me'] }),
 		)
 
 		await act(async () => {

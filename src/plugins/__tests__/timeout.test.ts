@@ -64,7 +64,7 @@ describe('timeout', () => {
 
 		// Still hanging and not timed out, so we settle it so the test can end cleanly.
 		expect(await Promise.race([pending, Promise.resolve('still-pending')])).toBe(
-			'still-pending'
+			'still-pending',
 		)
 	})
 

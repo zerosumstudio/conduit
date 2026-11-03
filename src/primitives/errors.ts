@@ -127,7 +127,7 @@ export function isConduitError(value: unknown): value is ConduitError {
 /** Narrows to a specific failure mode. `isConduitError(e) && e.code === 'TIMEOUT'` in one call. */
 export function isErrorCode<C extends ConduitErrorCode>(
 	value: unknown,
-	code: C
+	code: C,
 ): value is ConduitError & { code: C } {
 	return isConduitError(value) && value.code === code
 }

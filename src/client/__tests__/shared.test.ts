@@ -72,7 +72,7 @@ describe('sharedClient', () => {
 describe('sharedClient hot', () => {
 	it('does nothing when no hot context is given', () => {
 		expect(() =>
-			sharedClient('api', () => createClient({ fetch: stubFetch(ok).fetch }))
+			sharedClient('api', () => createClient({ fetch: stubFetch(ok).fetch })),
 		).not.toThrow()
 	})
 

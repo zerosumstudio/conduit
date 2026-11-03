@@ -135,7 +135,7 @@ export interface MockServer {
 		method: HttpMethod | '*',
 		pattern: string | RegExp,
 		responder: MockResponder,
-		options?: MockRouteOptions
+		options?: MockRouteOptions,
 	): MockServer
 	get(pattern: string | RegExp, responder: MockResponder, options?: MockRouteOptions): MockServer
 	post(pattern: string | RegExp, responder: MockResponder, options?: MockRouteOptions): MockServer
@@ -143,12 +143,12 @@ export interface MockServer {
 	patch(
 		pattern: string | RegExp,
 		responder: MockResponder,
-		options?: MockRouteOptions
+		options?: MockRouteOptions,
 	): MockServer
 	delete(
 		pattern: string | RegExp,
 		responder: MockResponder,
-		options?: MockRouteOptions
+		options?: MockRouteOptions,
 	): MockServer
 	any(pattern: string | RegExp, responder: MockResponder, options?: MockRouteOptions): MockServer
 	/** Drops every route and every recorded call. */
@@ -235,7 +235,7 @@ export function createMockServer(config: MockServerConfig = {}): MockServer {
 					}`,
 					method,
 					url,
-				})
+				}),
 			)
 		},
 

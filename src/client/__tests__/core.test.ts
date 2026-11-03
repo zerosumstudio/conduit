@@ -71,7 +71,7 @@ describe('request building', () => {
 		await client.post('/x', { a: 1 }, { headers: { 'content-type': 'application/vnd.x+json' } })
 
 		expect(new Headers(stub.calls[0]?.init.headers).get('content-type')).toBe(
-			'application/vnd.x+json'
+			'application/vnd.x+json',
 		)
 	})
 
@@ -205,7 +205,7 @@ describe('decoding', () => {
 		const client = createClient({
 			fetch: () =>
 				Promise.resolve(
-					new Response('', { headers: { 'content-type': 'application/json' } })
+					new Response('', { headers: { 'content-type': 'application/json' } }),
 				),
 		})
 
@@ -228,7 +228,7 @@ describe('decoding', () => {
 		const client = createClient({
 			fetch: () =>
 				Promise.resolve(
-					new Response('{oops', { headers: { 'content-type': 'application/json' } })
+					new Response('{oops', { headers: { 'content-type': 'application/json' } }),
 				),
 		})
 
@@ -332,7 +332,7 @@ describe('plugins', () => {
 		}
 
 		expect(() => createClient({ fetch: stubFetch(ok).fetch }).with(plugin)).toThrow(
-			/already exists on the client/
+			/already exists on the client/,
 		)
 	})
 })

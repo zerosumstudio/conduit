@@ -90,7 +90,7 @@ function resolveConfig(config: ClientConfig): ResolvedClientConfig {
 function buildHeaders(
 	configHeaders: HeadersInit | undefined,
 	optionHeaders: HeadersInit | undefined,
-	contentType: string | undefined
+	contentType: string | undefined,
 ): Headers {
 	const headers = new Headers(configHeaders)
 
@@ -143,7 +143,7 @@ export function redactRequest(request: ConduitRequest, redact: readonly string[]
 /** Same idea as {@link redactRequest}, applied to the `request` a response carries. */
 function redactResponse<T>(
 	response: ConduitResponse<T>,
-	redact: readonly string[]
+	redact: readonly string[],
 ): ConduitResponse<T> {
 	if (redact.length === 0) {
 		return response
@@ -174,7 +174,7 @@ const hasPathParams = (path: string): boolean =>
 function resolveEndpointOptions<Vars, Result>(
 	endpoint: EndpointDefinition<Vars, Result>,
 	vars: Vars,
-	options: Partial<RequestOptions> | undefined
+	options: Partial<RequestOptions> | undefined,
 ): RequestOptions {
 	const tags = resolveEndpointTags(endpoint.tags, vars)
 	const query = endpoint.query?.(vars)
@@ -196,7 +196,7 @@ function resolveEndpointOptions<Vars, Result>(
 /** Runs an endpoint's `response` schema, or plain function, against a decoded body. */
 async function decodeEndpointResponse<Result>(
 	schema: NonNullable<EndpointDefinition<unknown, Result>['response']>,
-	data: unknown
+	data: unknown,
 ): Promise<Result> {
 	if (typeof schema === 'function') {
 		return schema(data)
@@ -357,7 +357,7 @@ export class Client implements RequestMethods {
 	public post<T = unknown>(
 		path: string,
 		body?: unknown,
-		options?: MethodOptions
+		options?: MethodOptions,
 	): ConduitPromise<T> {
 		return this._execute<T>(path, bodyOptions('POST', body, options), undefined, undefined)
 	}
@@ -365,7 +365,7 @@ export class Client implements RequestMethods {
 	public put<T = unknown>(
 		path: string,
 		body?: unknown,
-		options?: MethodOptions
+		options?: MethodOptions,
 	): ConduitPromise<T> {
 		return this._execute<T>(path, bodyOptions('PUT', body, options), undefined, undefined)
 	}
@@ -373,7 +373,7 @@ export class Client implements RequestMethods {
 	public patch<T = unknown>(
 		path: string,
 		body?: unknown,
-		options?: MethodOptions
+		options?: MethodOptions,
 	): ConduitPromise<T> {
 		return this._execute<T>(path, bodyOptions('PATCH', body, options), undefined, undefined)
 	}
@@ -391,7 +391,7 @@ export class Client implements RequestMethods {
 	public call<Vars, Result>(
 		endpoint: Endpoint<Vars, Result>,
 		vars: Vars,
-		options?: Partial<RequestOptions>
+		options?: Partial<RequestOptions>,
 	): ConduitPromise<Result> {
 		const requestOptions = resolveEndpointOptions(endpoint, vars, options)
 		const inner = this._execute<unknown>(endpoint.path, requestOptions, undefined, undefined)
@@ -423,7 +423,7 @@ export class Client implements RequestMethods {
 	public upload<T = unknown>(
 		path: string,
 		body: FormData | Blob,
-		options: MethodOptions & { onProgress?: (event: UploadProgressEvent) => void } = {}
+		options: MethodOptions & { onProgress?: (event: UploadProgressEvent) => void } = {},
 	): ConduitPromise<T> {
 		this._assertAlive()
 
@@ -436,7 +436,7 @@ export class Client implements RequestMethods {
 						createFetchTransport({
 							...this._config,
 							fetch: createXhrFetch({ onProgress }),
-						})
+						}),
 					)
 
 		return this._execute<T>(
@@ -444,7 +444,7 @@ export class Client implements RequestMethods {
 			{ ...rest, method: 'POST', body, meta: { [TIMEOUT_META]: 0, ...meta } },
 			undefined,
 			undefined,
-			dispatch
+			dispatch,
 		)
 	}
 
@@ -498,7 +498,7 @@ export class Client implements RequestMethods {
 
 		if (!this._root.signal.aborted) {
 			this._root.abort(
-				new ConduitError({ code: 'ABORTED', message: 'The client was destroyed.' })
+				new ConduitError({ code: 'ABORTED', message: 'The client was destroyed.' }),
 			)
 		}
 
@@ -532,7 +532,7 @@ export class Client implements RequestMethods {
 				listener()
 			} catch (error) {
 				this._config.logger.error(
-					`[conduit] A plugin threw while dropping its state. ${String(error)}`
+					`[conduit] A plugin threw while dropping its state. ${String(error)}`,
 				)
 			}
 		}
@@ -550,7 +550,7 @@ export class Client implements RequestMethods {
 	/** Everything a request's identity depends on, derived once and shared with `keyFor`. */
 	private _prepare(
 		path: string,
-		options: RequestOptions
+		options: RequestOptions,
 	): {
 		method: HttpMethod
 		url: string
@@ -569,7 +569,7 @@ export class Client implements RequestMethods {
 			options.params,
 			options.query,
 			config.origins,
-			config.logger
+			config.logger,
 		)
 		const encoded = encodeBody(options.body)
 		const credentials = options.credentials ?? config.credentials
@@ -595,7 +595,7 @@ export class Client implements RequestMethods {
 		options: RequestOptions,
 		scopeSignal: AbortSignal | undefined,
 		scopeOwner: string | undefined,
-		dispatchOverride?: Next
+		dispatchOverride?: Next,
 	): ConduitPromise<T> {
 		const run = async (): Promise<ConduitResponse<T>> => {
 			this._assertAlive()
