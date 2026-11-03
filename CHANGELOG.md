@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Published as `@zerosumstudio/conduit`.** The repo moved to
+  [zerosumstudio/conduit](https://github.com/zerosumstudio/conduit). Swap the
+  package name, the imports and any `declare module` augmentation, nothing else
+  changes. `@bkincz/conduit` stays on npm at 2.0.0.
+
 ## 2.0.0
 
 The session and cache release. Credentials stay on the API origin, a user

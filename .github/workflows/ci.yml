@@ -117,16 +117,16 @@ jobs:
                   mkdir -p consumer && cd consumer
                   npm init -y > /dev/null
                   npm pkg set type=module
-                  npm install "$RUNNER_TEMP"/bkincz-conduit-*.tgz react
+                  npm install "$RUNNER_TEMP"/zerosumstudio-conduit-*.tgz react
 
             - name: Import every export, ESM and CJS
               working-directory: ${{ runner.temp }}/consumer
               run: |
                   node --input-type=module -e '
-                    const { createClient, defaults } = await import("@bkincz/conduit")
-                    await import("@bkincz/conduit/react")
-                    await import("@bkincz/conduit/devtools")
-                    const { createMockServer } = await import("@bkincz/conduit/testing")
+                    const { createClient, defaults } = await import("@zerosumstudio/conduit")
+                    await import("@zerosumstudio/conduit/react")
+                    await import("@zerosumstudio/conduit/devtools")
+                    const { createMockServer } = await import("@zerosumstudio/conduit/testing")
                     const server = createMockServer({ baseUrl: "/api" })
                     server.get("/ping", () => ({ ok: true }))
                     const api = defaults(createClient({ baseUrl: "/api", fetch: server.fetch }))
@@ -134,10 +134,10 @@ jobs:
                     if (body.ok !== true) throw new Error("unexpected body: " + JSON.stringify(body))
                   '
                   node -e '
-                    require("@bkincz/conduit")
-                    require("@bkincz/conduit/react")
-                    require("@bkincz/conduit/devtools")
-                    require("@bkincz/conduit/testing")
+                    require("@zerosumstudio/conduit")
+                    require("@zerosumstudio/conduit/react")
+                    require("@zerosumstudio/conduit/devtools")
+                    require("@zerosumstudio/conduit/testing")
                   '
 
             - name: Type-check against the tarball
@@ -145,10 +145,10 @@ jobs:
               run: |
                   npm install typescript@5 @types/react @types/node
                   cat > index.ts <<'TS'
-                  import { createClient, defaults, type ConduitError } from '@bkincz/conduit'
-                  import { createHooks } from '@bkincz/conduit/react'
-                  import { attachDevtools } from '@bkincz/conduit/devtools'
-                  import { createMockServer } from '@bkincz/conduit/testing'
+                  import { createClient, defaults, type ConduitError } from '@zerosumstudio/conduit'
+                  import { createHooks } from '@zerosumstudio/conduit/react'
+                  import { attachDevtools } from '@zerosumstudio/conduit/devtools'
+                  import { createMockServer } from '@zerosumstudio/conduit/testing'
 
                   const api = defaults(createClient({ baseUrl: '/api' }))
                   const hooks = createHooks(api)

@@ -132,7 +132,7 @@ export interface RetryAttemptEvent {
  * The event surface. Plugins extend it by declaration merging:
  *
  * ```ts
- * declare module '@bkincz/conduit' {
+ * declare module '@zerosumstudio/conduit' {
  * 	interface ConduitEventMap {
  * 		'cache:hit': { type: 'cache:hit'; key: string; at: number }
  * 	}

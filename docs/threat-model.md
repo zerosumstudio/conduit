@@ -14,7 +14,7 @@ read every response through `events`, clear the session, or replace the shared c
 does not try to stop that, because nothing in a browser can. The boundary is the integrity of
 the bundles you load: immutable remote urls, a content security policy that names the origins
 you deploy to, and a build pipeline you control. A federation tool such as
-[spool](https://github.com/bkincz/spool) owns that side.
+[spool](https://github.com/zerosumstudio/spool) owns that side.
 
 ## What conduit protects
 

@@ -15,10 +15,10 @@ import {
 	type Endpoint,
 	type SessionAdapter,
 	type StandardSchemaV1,
-} from '@bkincz/conduit'
-import { createHooks } from '@bkincz/conduit/react'
-import { attachDevtools } from '@bkincz/conduit/devtools'
-import { createMockServer, status } from '@bkincz/conduit/testing'
+} from '@zerosumstudio/conduit'
+import { createHooks } from '@zerosumstudio/conduit/react'
+import { attachDevtools } from '@zerosumstudio/conduit/devtools'
+import { createMockServer, status } from '@zerosumstudio/conduit/testing'
 
 interface User {
 	id: string

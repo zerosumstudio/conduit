@@ -174,7 +174,7 @@ function reconcile(key: string, existing: SharedEntry, options: SharedClientOpti
 			'conduit-version',
 			existing.conduitVersion,
 			CONDUIT_VERSION,
-			`Shared client "${key}" was created by conduit ${existing.conduitVersion}, but this bundle ships conduit ${CONDUIT_VERSION}. They can disagree about cache and session shape. Align conduit versions across your apps, or share @bkincz/conduit as a singleton in your module federation config.`
+			`Shared client "${key}" was created by conduit ${existing.conduitVersion}, but this bundle ships conduit ${CONDUIT_VERSION}. They can disagree about cache and session shape. Align conduit versions across your apps, or share @zerosumstudio/conduit as a singleton in your module federation config.`
 		)
 	}
 

@@ -7,13 +7,15 @@ A data-fetching client for micro frontends. One client is shared by every bundle
 ## Install
 
 ```bash
-pnpm add @bkincz/conduit
+pnpm add @zerosumstudio/conduit
 ```
+
+Up to 2.0.0 this was published as `@bkincz/conduit`. Swap the package name and the imports, the API is the same.
 
 ## Quick start
 
 ```ts
-import { createClient, defaults } from '@bkincz/conduit'
+import { createClient, defaults } from '@zerosumstudio/conduit'
 
 export const api = defaults(createClient({ baseUrl: '/api' }), {
 	cache: { ttl: 30_000, staleWhileRevalidate: true },
@@ -90,7 +92,7 @@ api.get('//evil.example.com/x') // rejected: CONFIG, always
 Everything rejects with a `ConduitError` carrying a `code`, plus `status`, `url`, `owner`, and the decoded `body` when there was one.
 
 ```ts
-import { isErrorCode } from '@bkincz/conduit'
+import { isErrorCode } from '@zerosumstudio/conduit'
 
 const { data, error } = await api.get<User>('/users/7').safe()
 
@@ -127,7 +129,7 @@ Narrow it if you send a header that is unique per request, like a trace id. Unde
 `defineEndpoint` names a request once, with its own path params, query, body, tags and response schema, so it can be called and keyed without repeating any of that.
 
 ```ts
-import { defineEndpoint } from '@bkincz/conduit'
+import { defineEndpoint } from '@zerosumstudio/conduit'
 
 const getUser = defineEndpoint<{ id: string }, User>({
 	method: 'GET',
@@ -229,7 +231,7 @@ Each federated bundle gets its own module instance, so a client built in the hos
 
 ```ts
 export const api = sharedClient(
-	'bkincz.api',
+	'app.api',
 	() => defaults(createClient({ baseUrl: '/api' })),
 	{ contract: 'v1', version: 1 } // warns when bundles disagree
 )
@@ -241,13 +243,13 @@ Tearing one down means deregistering it too, or the next bundle to ask gets the 
 
 ```ts
 api.destroy()
-releaseSharedClient('bkincz.api')
+releaseSharedClient('app.api')
 ```
 
 Under Vite, pass `hot` so a reload during development gets a fresh client instead of a destroyed one wedged in the registry:
 
 ```ts
-export const api = sharedClient('bkincz.api', () => defaults(createClient({ baseUrl: '/api' })), {
+export const api = sharedClient('app.api', () => defaults(createClient({ baseUrl: '/api' })), {
 	hot: import.meta.hot,
 })
 ```
@@ -258,7 +260,7 @@ export const api = sharedClient('bkincz.api', () => defaults(createClient({ base
 
 ```ts
 // api.ts
-export const api = sharedClient('bkincz.api', () =>
+export const api = sharedClient('app.api', () =>
 	defaults(createClient({ baseUrl: '/api' }), { session: { adapter } })
 )
 
@@ -373,7 +375,7 @@ api.events.on('request:error', ({ request, error }) => {
 ```
 
 ```ts
-import { attachDevtools } from '@bkincz/conduit/devtools'
+import { attachDevtools } from '@zerosumstudio/conduit/devtools'
 
 const devtools = attachDevtools(api)
 devtools.store.subscribe(render) // entries, inFlight, counters, session
@@ -397,10 +399,10 @@ What conduit protects, what it leaves to you, and why every bundle on the page i
 
 ## Testing
 
-`@bkincz/conduit/testing` mocks at the transport, so cache, dedupe, retry, the queue, and session recovery all run for real.
+`@zerosumstudio/conduit/testing` mocks at the transport, so cache, dedupe, retry, the queue, and session recovery all run for real.
 
 ```ts
-import { createMockServer, status, networkError, delay } from '@bkincz/conduit/testing'
+import { createMockServer, status, networkError, delay } from '@zerosumstudio/conduit/testing'
 
 const server = createMockServer({ baseUrl: '/api' })
 
@@ -419,4 +421,4 @@ Testing the hooks while conduit is linked from a sibling checkout (`link:` or `p
 
 ## License
 
-MIT © Benjamin Kinczel
+MIT © zerosum studio
