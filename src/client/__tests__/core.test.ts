@@ -17,7 +17,7 @@ function countHeaderConstruction(): { count(): number; restore(): void } {
 			super(init)
 			built++
 		}
-	} as typeof Headers
+	}
 
 	return {
 		count: () => built,
@@ -49,7 +49,7 @@ describe('request building', () => {
 
 		await client.get('/users/:id', { params: { id: 7 }, query: { expand: 'posts' } })
 
-		expect(stub.calls[0]?.url).toBe('/api/users/7?expand=posts')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/api/users/7?expand=posts')
 		expect(stub.calls[0]?.init.method).toBe('GET')
 	})
 
@@ -103,7 +103,7 @@ describe('request building', () => {
 
 		await client.get('/users', { query: { b: 2, a: 1 } })
 
-		expect(seen?.key).toBe('GET /api/users?a=1&b=2')
+		expect(seen?.key).toBe('GET http://localhost:3000/api/users?a=1&b=2')
 		expect(seen?.owner).toBe('shell')
 		expect(seen?.lane).toBe('default')
 	})
@@ -135,7 +135,7 @@ describe('result shapes', () => {
 		const result = await client.get('/x').safe()
 
 		expect(result.data).toBeNull()
-		expect(result.error?.code).toBe('HTTP_ERROR')
+		expect(result.error?.code).toBe('HTTP_STATUS')
 		expect(result.error?.status).toBe(404)
 		expect(result.error?.body).toEqual({ detail: 'nope' })
 	})
@@ -171,7 +171,7 @@ describe('failures', () => {
 		})
 
 		await expect(client.get('/x')).rejects.toMatchObject({
-			code: 'HTTP_ERROR',
+			code: 'HTTP_STATUS',
 			status: 410,
 			body: { detail: 'gone' },
 		})
@@ -224,7 +224,7 @@ describe('decoding', () => {
 		await expect(client.get('/x', { parse: 'text' })).resolves.toBe('{"a":1}')
 	})
 
-	it('reports an undecodable body as PARSE, distinct from a network failure', async () => {
+	it('reports an undecodable body as PARSE_FAILED, distinct from a network failure', async () => {
 		const client = createClient({
 			fetch: () =>
 				Promise.resolve(
@@ -234,7 +234,7 @@ describe('decoding', () => {
 
 		const { error } = await client.get('/x').safe()
 
-		expect(error?.code).toBe('PARSE')
+		expect(error?.code).toBe('PARSE_FAILED')
 	})
 })
 
@@ -243,12 +243,13 @@ describe('pipeline', () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch }).with({
 			name: 'rewrite',
-			middleware: async (request, next) => next(withRequest(request, { url: '/rewritten' })),
+			middleware: async (request, next) =>
+				next(withRequest(request, { url: 'http://localhost:3000/rewritten' })),
 		})
 
 		await client.get('/original')
 
-		expect(stub.calls[0]?.url).toBe('/rewritten')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/rewritten')
 	})
 
 	it('never materialises Headers for a request that short-circuits', async () => {
@@ -332,7 +333,7 @@ describe('plugins', () => {
 		}
 
 		expect(() => createClient({ fetch: stubFetch(ok).fetch }).with(plugin)).toThrow(
-			/already exists on the client/,
+			/the client already has/,
 		)
 	})
 })
@@ -431,7 +432,7 @@ describe('destroy', () => {
 
 		const { error } = await client.get('/x').safe()
 
-		expect(error?.code).toBe('CONFIG')
+		expect(error?.code).toBe('DESTROYED')
 		expect(error?.message).toMatch(/was destroyed/)
 	})
 

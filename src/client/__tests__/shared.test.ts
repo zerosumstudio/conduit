@@ -12,7 +12,7 @@ afterEach(() => {
 	vi.restoreAllMocks()
 })
 
-const REGISTRY_KEY = Symbol.for('conduit.sharedClients')
+const REGISTRY_KEY = Symbol.for('conduit.sharedClients.1')
 
 function seedRegistry(key: string, entry: Record<string, unknown>): void {
 	const scope = globalThis as unknown as Record<symbol, Map<string, unknown>>
@@ -101,8 +101,8 @@ describe('sharedClient mismatches', () => {
 		const build = (): ReturnType<typeof createClient> =>
 			createClient({ fetch: stubFetch(ok).fetch })
 
-		sharedClient('api', build, { contract: 'v1', version: 1 })
-		sharedClient('api', build, { contract: 'v1', version: 1 })
+		sharedClient('api', build, { apiVersion: 'v1', clientVersion: 1 })
+		sharedClient('api', build, { apiVersion: 'v1', clientVersion: 1 })
 
 		expect(warn).not.toHaveBeenCalled()
 	})
@@ -112,11 +112,11 @@ describe('sharedClient mismatches', () => {
 		const build = (): ReturnType<typeof createClient> =>
 			createClient({ fetch: stubFetch(ok).fetch })
 
-		sharedClient('api', build, { contract: 'v1' })
-		sharedClient('api', build, { contract: 'v2' })
+		sharedClient('api', build, { apiVersion: 'v1' })
+		sharedClient('api', build, { apiVersion: 'v2' })
 
 		expect(warn).toHaveBeenCalledOnce()
-		expect(String(warn.mock.calls[0]?.[0])).toMatch(/different version of the API/)
+		expect(String(warn.mock.calls[0]?.[0])).toMatch(/Deploy the apps together/)
 	})
 
 	it('warns when a newer bundle expects a client it cannot swap', () => {
@@ -124,8 +124,8 @@ describe('sharedClient mismatches', () => {
 		const build = (): ReturnType<typeof createClient> =>
 			createClient({ fetch: stubFetch(ok).fetch })
 
-		sharedClient('api', build, { version: 1 })
-		sharedClient('api', build, { version: 2 })
+		sharedClient('api', build, { clientVersion: 1 })
+		sharedClient('api', build, { clientVersion: 2 })
 
 		expect(String(warn.mock.calls[0]?.[0])).toMatch(/existing client stays in use/)
 	})
@@ -139,8 +139,8 @@ describe('sharedClient mismatches', () => {
 		seedRegistry('api', {
 			client,
 			conduitVersion: '0.0.0-other',
-			contract: undefined,
-			version: undefined,
+			apiVersion: undefined,
+			clientVersion: undefined,
 		})
 
 		sharedClient('api', build)
@@ -155,15 +155,15 @@ describe('sharedClient mismatches', () => {
 		const build = (): ReturnType<typeof createClient> =>
 			createClient({ fetch: stubFetch(ok).fetch })
 
-		sharedClient('api', build, { contract: 'v1', version: 1 })
+		sharedClient('api', build, { apiVersion: 'v1', clientVersion: 1 })
 		sharedClient('api', build, {
-			contract: 'v2',
-			version: 2,
+			apiVersion: 'v2',
+			clientVersion: 2,
 			onMismatch: report => reports.push(report),
 		})
 
 		expect(warn).not.toHaveBeenCalled()
-		expect(reports.map(report => report.kind)).toEqual(['contract', 'client-version'])
+		expect(reports.map(report => report.kind)).toEqual(['api-version', 'client-version'])
 		expect(reports[0]).toMatchObject({ key: 'api', existing: 'v1', joining: 'v2' })
 	})
 })

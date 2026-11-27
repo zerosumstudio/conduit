@@ -1,4 +1,4 @@
-import { DEV } from './dev'
+import { IS_DEVELOPMENT } from './dev'
 
 /*
  *   FREEZE
@@ -15,6 +15,7 @@ function deepFreeze(value: unknown, seen: WeakSet<object>): void {
 		for (const entry of value) {
 			deepFreeze(entry, seen)
 		}
+
 		return
 	}
 
@@ -34,8 +35,9 @@ export function protect(data: unknown): void {
 		return
 	}
 
-	if (DEV) {
+	if (IS_DEVELOPMENT) {
 		deepFreeze(data, new WeakSet())
+
 		return
 	}
 

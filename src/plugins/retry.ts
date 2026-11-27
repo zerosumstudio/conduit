@@ -1,12 +1,8 @@
+import { formatKey } from '../http/redact'
 import { toAbortError } from '../http/abort'
 import { toConduitError, type ConduitError } from '../primitives/errors'
 import type { EventBus } from '../primitives/events'
-import {
-	IDEMPOTENT_METHODS,
-	type ConduitRequest,
-	type Middleware,
-	type Plugin,
-} from '../primitives/types'
+import type { ConduitRequest, HttpMethod, Middleware, Plugin } from '../primitives/types'
 
 /*
  *   CONFIG
@@ -16,33 +12,56 @@ export interface RetryInfo {
 	readonly error: ConduitError
 	/** The attempt that just failed. */
 	readonly attempt: number
-	readonly delay: number
+	readonly delayMs: number
 }
 
 export interface RetryConfig {
 	/** Total attempts including the first. Defaults to 3. */
-	attempts?: number
+	attempts?: number | undefined
 	/** First backoff step in milliseconds. Defaults to 300. */
-	baseDelay?: number
-	/** Ceiling for a single backoff. Defaults to 5000. */
-	maxDelay?: number
+	baseDelayMs?: number | undefined
+	/** Ceiling for a single backoff step. Defaults to 5000. */
+	maxDelayMs?: number | undefined
+	/**
+	 * The longest `Retry-After` that is honoured. A server asking for more gets
+	 * no retry rather than a clamped one. Defaults to 30 seconds.
+	 */
+	maxRetryAfterMs?: number | undefined
 	/** Spread retries across the window instead of stacking them. Defaults to true. */
-	jitter?: boolean
-	/** Refuse to replay `POST` and `PATCH`. Defaults to true. */
-	idempotentOnly?: boolean
+	jitter?: boolean | undefined
+	/**
+	 * Refuse to replay `POST` and `PATCH`, except a request marked `cacheable`,
+	 * which only reads. Defaults to true.
+	 */
+	idempotentOnly?: boolean | undefined
 	/** Response statuses worth another attempt. */
-	statuses?: readonly number[]
+	statuses?: readonly number[] | undefined
 	/** Replaces the built-in decision entirely. */
-	shouldRetry?: (error: ConduitError, request: ConduitRequest, attempt: number) => boolean
-	onRetry?: (info: RetryInfo) => void
+	shouldRetry?:
+		((error: ConduitError, request: ConduitRequest, attempt: number) => boolean) | undefined
+	onRetry?: ((info: RetryInfo) => void) | undefined
 }
 
+/** Methods conduit may replay after a failure. `POST` and `PATCH` are absent deliberately. */
+const IDEMPOTENT_METHODS: ReadonlySet<HttpMethod> = new Set<HttpMethod>([
+	'GET',
+	'HEAD',
+	'PUT',
+	'DELETE',
+	'OPTIONS',
+])
+
 const RETRYABLE_STATUSES: readonly number[] = [408, 425, 429, 500, 502, 503, 504]
+
+const DEFAULT_ATTEMPTS = 3
+const DEFAULT_BASE_DELAY_MS = 300
+const DEFAULT_MAX_DELAY_MS = 5_000
+const DEFAULT_MAX_RETRY_AFTER_MS = 30_000
 
 /*
  *   RETRY-AFTER
  ***************************************************************************************************/
-function retryAfter(error: ConduitError): number | undefined {
+function parseRetryAfter(error: ConduitError): number | undefined {
 	const header = error.headers?.get('retry-after')
 
 	if (header === undefined || header === null || header.trim() === '') {
@@ -60,12 +79,8 @@ function retryAfter(error: ConduitError): number | undefined {
 	return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now())
 }
 
-function bodyExhausted(request: ConduitRequest): boolean {
-	return (
-		typeof ReadableStream !== 'undefined' &&
-		request.body instanceof ReadableStream &&
-		request.body.locked
-	)
+function isBodyConsumed(request: ConduitRequest): boolean {
+	return request.body instanceof ReadableStream && request.body.locked
 }
 
 /*
@@ -100,17 +115,22 @@ function sleep(ms: number, request: ConduitRequest): Promise<void> {
  * queue so a replay waits its turn instead of amplifying a failing endpoint.
  */
 export function retry(config: RetryConfig = {}): Plugin {
-	const attempts = config.attempts ?? 3
-	const baseDelay = config.baseDelay ?? 300
-	const maxDelay = config.maxDelay ?? 5_000
+	const attempts = config.attempts ?? DEFAULT_ATTEMPTS
+	const baseDelayMs = config.baseDelayMs ?? DEFAULT_BASE_DELAY_MS
+	const maxDelayMs = config.maxDelayMs ?? DEFAULT_MAX_DELAY_MS
+	const maxRetryAfterMs = config.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS
 	const jitter = config.jitter ?? true
 	const idempotentOnly = config.idempotentOnly ?? true
 	const statuses = new Set(config.statuses ?? RETRYABLE_STATUSES)
 
 	let events: EventBus | undefined
 
-	const retryable = (error: ConduitError, request: ConduitRequest, attempt: number): boolean => {
-		if (bodyExhausted(request)) {
+	const isRetryable = (
+		error: ConduitError,
+		request: ConduitRequest,
+		attempt: number,
+	): boolean => {
+		if (isBodyConsumed(request)) {
 			return false
 		}
 
@@ -118,15 +138,7 @@ export function retry(config: RetryConfig = {}): Plugin {
 			return config.shouldRetry(error, request, attempt)
 		}
 
-		if (
-			error.code === 'ABORTED' ||
-			error.code === 'CONFIG' ||
-			error.code === 'UNAUTHENTICATED'
-		) {
-			return false
-		}
-
-		if (idempotentOnly && !IDEMPOTENT_METHODS.has(request.method)) {
+		if (idempotentOnly && !IDEMPOTENT_METHODS.has(request.method) && !request.cacheable) {
 			return false
 		}
 
@@ -135,23 +147,24 @@ export function retry(config: RetryConfig = {}): Plugin {
 		}
 
 		return (
-			error.code === 'HTTP_ERROR' && error.status !== undefined && statuses.has(error.status)
+			error.code === 'HTTP_STATUS' && error.status !== undefined && statuses.has(error.status)
 		)
 	}
 
 	/**
 	 * How long to wait before the next attempt, or `undefined` to give up. A
-	 * `Retry-After` beyond `maxDelay` gives up rather than being clamped, which
-	 * would ignore what the server just asked for.
+	 * `Retry-After` beyond `maxRetryAfterMs` gives up rather than being clamped,
+	 * which would ignore what the server just asked for.
 	 */
-	const backoff = (error: ConduitError, attempt: number): number | undefined => {
-		const instructed = retryAfter(error)
-
-		if (instructed !== undefined) {
-			return instructed > maxDelay ? undefined : instructed
+	const getBackoffMs = (
+		attempt: number,
+		retryAfterMs: number | undefined,
+	): number | undefined => {
+		if (retryAfterMs !== undefined) {
+			return retryAfterMs > maxRetryAfterMs ? undefined : retryAfterMs
 		}
 
-		const window = Math.min(maxDelay, baseDelay * 2 ** (attempt - 1))
+		const window = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1))
 
 		return jitter ? Math.random() * window : window
 	}
@@ -160,23 +173,23 @@ export function retry(config: RetryConfig = {}): Plugin {
 		let attempt = 1
 
 		for (;;) {
-			request.meta['attempt'] = attempt
+			request.meta.attempt = attempt
 
 			try {
 				return await next(request)
 			} catch (cause) {
 				const error = toConduitError(cause)
-				const after = retryAfter(error)
+				const retryAfterMs = parseRetryAfter(error)
 
-				if (after !== undefined) {
-					error.retryAfter = after
+				if (retryAfterMs !== undefined) {
+					error.retryAfterMs = retryAfterMs
 				}
 
-				if (attempt >= attempts || !retryable(error, request, attempt)) {
+				if (attempt >= attempts || !isRetryable(error, request, attempt)) {
 					throw error
 				}
 
-				const delay = backoff(error, attempt)
+				const delay = getBackoffMs(attempt, retryAfterMs)
 
 				if (delay === undefined) {
 					throw error
@@ -185,16 +198,16 @@ export function retry(config: RetryConfig = {}): Plugin {
 				if (events?.active === true) {
 					events.emit('retry:attempt', {
 						type: 'retry:attempt',
-						key: request.key,
+						key: formatKey(request),
 						owner: request.owner,
 						attempt,
-						delay,
-						reason: error.code,
+						delayMs: delay,
+						code: error.code,
 						at: Date.now(),
 					})
 				}
 
-				config.onRetry?.({ request, error, attempt, delay })
+				config.onRetry?.({ request, error, attempt, delayMs: delay })
 
 				await sleep(delay, request)
 				attempt++
@@ -207,7 +220,6 @@ export function retry(config: RetryConfig = {}): Plugin {
 		middleware,
 		onInit: ctx => {
 			events = ctx.events
-			return undefined
 		},
 	}
 }

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { ConduitError, ERROR_CODES, isConduitError, isErrorCode } from '../errors'
+import { ConduitError, isConduitError, isErrorCode, toConduitError } from '../errors'
 
 describe('ConduitError', () => {
 	it('carries the failure mode and request identity', () => {
 		const error = new ConduitError({
-			code: 'HTTP_ERROR',
+			code: 'HTTP_STATUS',
 			message: 'Request failed with 404',
 			method: 'GET',
 			url: '/users/1',
@@ -15,7 +15,7 @@ describe('ConduitError', () => {
 
 		expect(error).toBeInstanceOf(Error)
 		expect(error.name).toBe('ConduitError')
-		expect(error.code).toBe('HTTP_ERROR')
+		expect(error.code).toBe('HTTP_STATUS')
 		expect(error.method).toBe('GET')
 		expect(error.url).toBe('/users/1')
 		expect(error.status).toBe(404)
@@ -41,7 +41,7 @@ describe('ConduitError', () => {
 
 	it('omits the body from its log projection', () => {
 		const error = new ConduitError({
-			code: 'HTTP_ERROR',
+			code: 'HTTP_STATUS',
 			message: 'nope',
 			status: 403,
 			body: { email: 'user@example.com' },
@@ -49,7 +49,7 @@ describe('ConduitError', () => {
 
 		expect(error.toJSON()).toEqual({
 			name: 'ConduitError',
-			code: 'HTTP_ERROR',
+			code: 'HTTP_STATUS',
 			message: 'nope',
 			method: undefined,
 			url: undefined,
@@ -92,8 +92,20 @@ describe('isErrorCode', () => {
 	})
 })
 
-describe('ERROR_CODES', () => {
-	it('is unique and frozen at the type level', () => {
-		expect(new Set(ERROR_CODES).size).toBe(ERROR_CODES.length)
+describe('requestId', () => {
+	it('is carried on the error and in its log-safe projection', () => {
+		const error = new ConduitError({ code: 'NETWORK', message: 'x', requestId: 'req-1' })
+
+		expect(error.requestId).toBe('req-1')
+		expect(error.toJSON().requestId).toBe('req-1')
+	})
+})
+
+describe('toConduitError', () => {
+	it('passes a conduit error through and wraps anything else as UNKNOWN', () => {
+		const error = new ConduitError({ code: 'TIMEOUT', message: 'slow' })
+
+		expect(toConduitError(error)).toBe(error)
+		expect(toConduitError('boom').code).toBe('UNKNOWN')
 	})
 })

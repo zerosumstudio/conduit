@@ -14,10 +14,10 @@ describe('observable', () => {
 	it('starts idle for a key nothing has asked for', () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(observable())
 
-		expect(client.observe('GET /nothing').get()).toMatchObject({
+		expect(client.observe('GET /nothing').getState()).toMatchObject({
 			status: 'idle',
 			data: undefined,
-			fetching: false,
+			isFetching: false,
 		})
 	})
 
@@ -25,7 +25,7 @@ describe('observable', () => {
 		const client = createClient({ baseUrl: '/api', fetch: stubFetch(ok).fetch }).with(
 			observable(),
 		)
-		const store = client.observe<{ id: number }>(client.keyFor('/me'))
+		const store = client.observe<{ id: number }>(client.getKey('/me'))
 		const seen: string[] = []
 
 		store.subscribe(state => seen.push(state.status))
@@ -33,7 +33,11 @@ describe('observable', () => {
 		await client.get('/me')
 		await tick()
 
-		expect(store.get()).toMatchObject({ status: 'success', data: { id: 1 }, fetching: false })
+		expect(store.getState()).toMatchObject({
+			status: 'success',
+			data: { id: 1 },
+			isFetching: false,
+		})
 		expect(seen).toContain('success')
 	})
 
@@ -48,15 +52,15 @@ describe('observable', () => {
 			},
 		}).with(observable())
 
-		const key = client.keyFor('/me')
+		const key = client.getKey('/me')
 
 		await client.get('/me')
 		await client.get('/me').safe()
 
-		expect(client.observe(key).get()).toMatchObject({
+		expect(client.observe(key).getState()).toMatchObject({
 			status: 'error',
 			data: { id: 1 },
-			fetching: false,
+			isFetching: false,
 		})
 	})
 
@@ -65,13 +69,13 @@ describe('observable', () => {
 			.with(observable())
 			.with(cache())
 
-		const key = client.keyFor('/me')
+		const key = client.getKey('/me')
 
 		await client.get('/me')
-		expect(client.observe(key).get().from).toBe('network')
+		expect(client.observe(key).getState().from).toBe('network')
 
 		await client.get('/me')
-		expect(client.observe(key).get().from).toBe('cache')
+		expect(client.observe(key).getState().from).toBe('cache')
 	})
 
 	it('shares one store per key, however many callers observe it', () => {
@@ -85,8 +89,8 @@ describe('observable', () => {
 
 		await client.get('/a')
 
-		expect(client.observe(client.keyFor('/a')).get().status).toBe('success')
-		expect(client.observe(client.keyFor('/b')).get().status).toBe('idle')
+		expect(client.observe(client.getKey('/a')).getState().status).toBe('success')
+		expect(client.observe(client.getKey('/b')).getState().status).toBe('idle')
 	})
 
 	it('evicts unwatched state past the cap, once the grace period has passed', async () => {
@@ -98,25 +102,25 @@ describe('observable', () => {
 
 		// Not evicted yet. Eviction is deferred rather than run the instant
 		// another key is created, so a render's not-yet-subscribed store survives.
-		expect(client.observedKeys()).toBe(3)
+		expect(client.getObservedCount()).toBe(3)
 
 		await flush()
 
-		expect(client.observedKeys()).toBe(2)
+		expect(client.getObservedCount()).toBe(2)
 	})
 
 	it('never evicts state something is rendering from', async () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(observable({ max: 1 }))
 
-		client.observe(client.keyFor('/pinned')).subscribe(() => {})
+		client.observe(client.getKey('/pinned')).subscribe(() => {})
 
 		await client.get('/pinned')
 		await client.get('/a')
 		await client.get('/b')
 		await flush()
 
-		expect(client.observe(client.keyFor('/pinned')).get().status).toBe('success')
-		expect(client.observedKeys()).toBe(1)
+		expect(client.observe(client.getKey('/pinned')).getState().status).toBe('success')
+		expect(client.getObservedCount()).toBe(1)
 	})
 
 	it('does not evict a store created during a render before it has subscribed', async () => {
@@ -124,12 +128,12 @@ describe('observable', () => {
 
 		// Mimics two components rendering in the same pass, each creating its own
 		// store via `observe()` before either has committed and subscribed.
-		const rendered = client.observe(client.keyFor('/rendered'))
-		client.observe(client.keyFor('/other'))
+		const rendered = client.observe(client.getKey('/rendered'))
+		client.observe(client.getKey('/other'))
 
 		// The grace period has not elapsed, so the freshly created store survives
 		// even though it has no subscriber yet and the cap is already exceeded.
-		expect(client.observedKeys()).toBe(2)
+		expect(client.getObservedCount()).toBe(2)
 
 		const off = rendered.subscribe(() => {})
 
@@ -137,8 +141,8 @@ describe('observable', () => {
 
 		// Now that it is subscribed and the sweep has run, "rendered" is the one
 		// kept — "other" never subscribed and is what the cap actually meant to evict.
-		expect(client.observedKeys()).toBe(1)
-		expect(rendered.get().status).toBe('idle')
+		expect(client.getObservedCount()).toBe(1)
+		expect(rendered.getState().status).toBe('idle')
 
 		off()
 	})
@@ -148,15 +152,15 @@ describe('observable', () => {
 			.with(observable())
 			.with(cache())
 
-		const key = client.keyFor('/me')
+		const key = client.getKey('/me')
 
 		await client.get('/me', { tags: ['users'] })
-		const before = client.observe(key).get().invalidatedAt
+		const before = client.observe(key).getState().invalidatedAt
 
 		client.invalidateTag('users')
 
-		expect(client.observe(key).get().invalidatedAt).toBeGreaterThan(before)
-		expect(client.observe(key).get().data).toEqual({ id: 1 })
+		expect(client.observe(key).getState().invalidatedAt).toBeGreaterThan(before)
+		expect(client.observe(key).getState().data).toEqual({ id: 1 })
 	})
 
 	it('reaches a mounted store on a direct key invalidation too', async () => {
@@ -164,34 +168,34 @@ describe('observable', () => {
 			.with(observable())
 			.with(cache())
 
-		const key = client.keyFor('/me')
+		const key = client.getKey('/me')
 
 		await client.get('/me')
-		const before = client.observe(key).get().invalidatedAt
+		const before = client.observe(key).getState().invalidatedAt
 
 		client.invalidate(key)
 
-		expect(client.observe(key).get().invalidatedAt).toBeGreaterThan(before)
+		expect(client.observe(key).getState().invalidatedAt).toBeGreaterThan(before)
 	})
 
 	it('blanks every store and bumps them on an identity reset, rather than leaving them idle forever', async () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch })
 			.with(observable())
-			.with(session({ adapter: { load: async () => null } }))
+			.with(session({ adapter: { load: async () => null, identify: () => 'nobody' } }))
 
-		const key = client.keyFor('/me')
+		const key = client.getKey('/me')
 
 		await client.get('/me')
 
 		const store = client.observe(key)
-		const before = store.get().invalidatedAt
+		const before = store.getState().invalidatedAt
 
-		expect(store.get()).toMatchObject({ status: 'success', data: { id: 1 } })
+		expect(store.getState()).toMatchObject({ status: 'success', data: { id: 1 } })
 
 		client.session.clear()
 
-		expect(store.get()).toMatchObject({ status: 'idle', data: undefined })
-		expect(store.get().invalidatedAt).toBeGreaterThan(before)
+		expect(store.getState()).toMatchObject({ status: 'idle', data: undefined })
+		expect(store.getState().invalidatedAt).toBeGreaterThan(before)
 	})
 
 	it('bumps every store when the cache is cleared entirely', async () => {
@@ -202,12 +206,12 @@ describe('observable', () => {
 		await client.get('/a')
 		await client.get('/b')
 
-		const before = client.observe(client.keyFor('/a')).get().invalidatedAt
+		const before = client.observe(client.getKey('/a')).getState().invalidatedAt
 
 		client.clearCache()
 
-		expect(client.observe(client.keyFor('/a')).get().invalidatedAt).toBeGreaterThan(before)
-		expect(client.observe(client.keyFor('/b')).get().invalidatedAt).toBeGreaterThan(before)
+		expect(client.observe(client.getKey('/a')).getState().invalidatedAt).toBeGreaterThan(before)
+		expect(client.observe(client.getKey('/b')).getState().invalidatedAt).toBeGreaterThan(before)
 	})
 
 	it('reaches a mounted store when the cache is written to directly via setData', async () => {
@@ -215,12 +219,12 @@ describe('observable', () => {
 			.with(observable())
 			.with(cache())
 
-		const key = client.keyFor('/me')
+		const key = client.getKey('/me')
 
 		await client.get('/me')
 		client.setData(key, { id: 42 })
 
-		expect(client.observe(key).get()).toMatchObject({
+		expect(client.observe(key).getState()).toMatchObject({
 			status: 'success',
 			data: { id: 42 },
 			from: 'cache',
@@ -238,7 +242,7 @@ describe('observable', () => {
 	it('tolerates unsubscribing twice', async () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(observable())
 
-		const off = client.observe(client.keyFor('/me')).subscribe(() => {})
+		const off = client.observe(client.getKey('/me')).subscribe(() => {})
 
 		expect(() => {
 			off()
@@ -257,14 +261,14 @@ describe('observable', () => {
 	})
 })
 
-describe('keyFor', () => {
+describe('getKey', () => {
 	it('names the request a call would make', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ baseUrl: '/api', fetch: stub.fetch })
 
-		const key = client.keyFor('/users/:id', { params: { id: 7 }, query: { expand: 'posts' } })
+		const key = client.getKey('/users/:id', { params: { id: 7 }, query: { expand: 'posts' } })
 
-		expect(key).toBe('GET /api/users/7?expand=posts')
+		expect(key).toBe('GET http://localhost:3000/api/users/7?expand=posts')
 	})
 
 	it('is what the cache stores under, so invalidation needs no hand-built strings', async () => {
@@ -273,6 +277,6 @@ describe('keyFor', () => {
 
 		await client.get('/users/:id', { params: { id: 7 } })
 
-		expect(client.invalidate(client.keyFor('/users/:id', { params: { id: 7 } }))).toBe(true)
+		expect(client.invalidate(client.getKey('/users/:id', { params: { id: 7 } }))).toBe(true)
 	})
 })

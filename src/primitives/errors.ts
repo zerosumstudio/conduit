@@ -4,29 +4,36 @@
 /**
  * Closed set of failure modes, discriminating `ConduitError`.
  *
- * - `HTTP_ERROR`: the server answered with a failing status.
+ * - `HTTP_STATUS`: the server answered with a failing status.
  * - `NETWORK`: the request never reached a server (DNS, offline, CORS, TLS).
  * - `TIMEOUT`: the request exceeded its own deadline.
  * - `ABORTED`: a caller, a scope, or a superseding request cancelled it.
- * - `PARSE`: a body arrived but could not be decoded as declared.
- * - `UNAUTHENTICATED`: the session is gone and cannot be recovered.
- * - `CONFIG`: conduit was set up wrong. Always a developer error.
- * - `SCHEMA`: an endpoint's `response` schema rejected the decoded body.
+ * - `PARSE_FAILED`: a body arrived but could not be decoded as declared.
+ * - `VALIDATION_FAILED`: an endpoint's `response` schema or function rejected the decoded body.
+ * - `UNAUTHENTICATED`: the session is gone and could not be recovered.
+ * - `REDIRECT_BLOCKED`: a request carrying a credential was answered with a redirect.
+ * - `ORIGIN_REJECTED`: a url resolved outside the origins this client may call.
+ * - `INVALID_ARGUMENT`: conduit was used wrong. Always a developer error.
+ * - `DESTROYED`: the client was destroyed.
+ * - `DUPLICATE_PLUGIN`: a plugin was installed twice.
+ * - `EXTENSION_COLLISION`: a plugin tried to add a name the client already has.
  * - `UNKNOWN`: something threw that conduit cannot classify.
  */
-export const ERROR_CODES = [
-	'HTTP_ERROR',
-	'NETWORK',
-	'TIMEOUT',
-	'ABORTED',
-	'PARSE',
-	'UNAUTHENTICATED',
-	'CONFIG',
-	'SCHEMA',
-	'UNKNOWN',
-] as const
-
-export type ConduitErrorCode = (typeof ERROR_CODES)[number]
+export type ConduitErrorCode =
+	| 'HTTP_STATUS'
+	| 'NETWORK'
+	| 'TIMEOUT'
+	| 'ABORTED'
+	| 'PARSE_FAILED'
+	| 'VALIDATION_FAILED'
+	| 'UNAUTHENTICATED'
+	| 'REDIRECT_BLOCKED'
+	| 'ORIGIN_REJECTED'
+	| 'INVALID_ARGUMENT'
+	| 'DESTROYED'
+	| 'DUPLICATE_PLUGIN'
+	| 'EXTENSION_COLLISION'
+	| 'UNKNOWN'
 
 /*
  *   TYPES
@@ -34,17 +41,20 @@ export type ConduitErrorCode = (typeof ERROR_CODES)[number]
 export interface ConduitErrorInit {
 	code: ConduitErrorCode
 	message: string
-	method?: string
-	url?: string
-	status?: number
+	method?: string | undefined
+	/** Already query-redacted. Build it with `formatErrorUrl`. */
+	url?: string | undefined
+	status?: number | undefined
 	/** Which app or remote issued the request. Absent when conduit cannot attribute it. */
 	owner?: string | undefined
+	/** Set by the `requestId` plugin, so a failure can be matched to a server log line. */
+	requestId?: string | undefined
 	/** Response headers, when there was a response. Carries `Retry-After` and rate-limit hints. */
 	headers?: Headers | undefined
 	/** Decoded response body, when the failure came from a response conduit could read. */
 	body?: unknown
 	/** Milliseconds the server asked to wait, when the response carried `Retry-After`. */
-	retryAfter?: number
+	retryAfterMs?: number | undefined
 	cause?: unknown
 }
 
@@ -57,6 +67,7 @@ export interface ConduitErrorJson {
 	url: string | undefined
 	status: number | undefined
 	owner: string | undefined
+	requestId: string | undefined
 }
 
 /*
@@ -70,12 +81,15 @@ export class ConduitError extends Error {
 
 	public readonly code: ConduitErrorCode
 	public readonly method: string | undefined
+	/** The request url with secret query values replaced, never the raw one. */
 	public readonly url: string | undefined
 	public readonly status: number | undefined
 	/** The app or remote that issued the request, which the shared stack trace cannot say. */
 	public readonly owner: string | undefined
 	/** Milliseconds the server asked to wait, from `Retry-After`. The retry plugin fills it in. */
-	public retryAfter: number | undefined
+	public retryAfterMs: number | undefined
+	/** The id the `requestId` plugin sent with the failing attempt. */
+	public requestId: string | undefined
 	/**
 	 * Kept off {@link ConduitError.toJSON}, with `body`. Both can carry user
 	 * data, so both are also non-enumerable: still readable directly, but
@@ -86,21 +100,18 @@ export class ConduitError extends Error {
 	declare readonly body: unknown
 
 	constructor(init: ConduitErrorInit) {
-		super(init.message)
+		super(init.message, init.cause === undefined ? undefined : { cause: init.cause })
 
 		this.code = init.code
 		this.method = init.method
 		this.url = init.url
 		this.status = init.status
 		this.owner = init.owner
-		this.retryAfter = init.retryAfter
+		this.retryAfterMs = init.retryAfterMs
+		this.requestId = init.requestId
 
 		Object.defineProperty(this, 'headers', { value: init.headers, configurable: true })
 		Object.defineProperty(this, 'body', { value: init.body, configurable: true })
-
-		if (init.cause !== undefined) {
-			this.cause = init.cause
-		}
 	}
 
 	public toJSON(): ConduitErrorJson {
@@ -112,6 +123,7 @@ export class ConduitError extends Error {
 			url: this.url,
 			status: this.status,
 			owner: this.owner,
+			requestId: this.requestId,
 		}
 	}
 }
@@ -135,12 +147,40 @@ export function isErrorCode<C extends ConduitErrorCode>(
 /*
  *   NORMALISE
  ***************************************************************************************************/
-/** Coerces anything thrown into a `ConduitError`. Values that already are one pass through. */
-export function toConduitError(value: unknown): ConduitError {
+/**
+ * Coerces anything thrown into a `ConduitError`. A conduit error passes through
+ * untouched unless a `code` or `message` asks for a different one, and then it is
+ * copied, with the original as its `cause`.
+ */
+export function toConduitError(
+	value: unknown,
+	code?: ConduitErrorCode,
+	message?: string,
+): ConduitError {
 	if (isConduitError(value)) {
-		return value
+		if (code === undefined && message === undefined) {
+			return value
+		}
+
+		return new ConduitError({
+			code: code ?? value.code,
+			message: message ?? value.message,
+			method: value.method,
+			url: value.url,
+			status: value.status,
+			owner: value.owner,
+			requestId: value.requestId,
+			headers: value.headers,
+			body: value.body,
+			cause: value,
+		})
 	}
 
-	const message = value instanceof Error ? value.message : String(value)
-	return new ConduitError({ code: 'UNKNOWN', message, cause: value })
+	const detail = value instanceof Error ? value.message : String(value)
+
+	return new ConduitError({
+		code: code ?? 'UNKNOWN',
+		message: message ?? detail,
+		cause: value,
+	})
 }

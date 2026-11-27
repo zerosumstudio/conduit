@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import { createClient } from '../core'
 import { CONDUIT_VERSION } from '../../primitives/version'
-import { IDEMPOTENT_METHODS } from '../../primitives/types'
 import { hangingFetch, jsonResponse, stubFetch } from '../../__tests__/helpers'
 
 const ok = (): Response => jsonResponse({ ok: true })
@@ -63,15 +62,6 @@ describe('scope verbs', () => {
 			'PATCH',
 			'OPTIONS',
 		])
-	})
-
-	it('ignores a second abort', () => {
-		const scope = createClient({ fetch: stubFetch(ok).fetch }).scope('remote')
-
-		scope.abort('first')
-		scope.abort('second')
-
-		expect((scope.signal.reason as Error).message).toBe('first')
 	})
 })
 
@@ -171,7 +161,7 @@ describe('plugin context', () => {
 
 		await issued
 
-		expect(stub.calls[0]?.url).toBe('/api/warm')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/api/warm')
 	})
 
 	it('exposes the resolved defaults', () => {
@@ -214,14 +204,6 @@ describe('abort sources', () => {
 })
 
 describe('constants', () => {
-	it('treats replayable methods as idempotent and write methods as not', () => {
-		expect(IDEMPOTENT_METHODS.has('GET')).toBe(true)
-		expect(IDEMPOTENT_METHODS.has('PUT')).toBe(true)
-		expect(IDEMPOTENT_METHODS.has('DELETE')).toBe(true)
-		expect(IDEMPOTENT_METHODS.has('POST')).toBe(false)
-		expect(IDEMPOTENT_METHODS.has('PATCH')).toBe(false)
-	})
-
 	it('reports the build version', () => {
 		expect(CONDUIT_VERSION).toMatch(/^\d+\.\d+\.\d+/)
 	})

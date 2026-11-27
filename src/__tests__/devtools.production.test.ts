@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createClient } from '../client/core'
 import { createMockServer } from '../testing'
 
-vi.mock('../primitives/dev', () => ({ DEV: false }))
+vi.mock('../primitives/dev', () => ({ IS_DEVELOPMENT: false }))
 
 afterEach(() => {
 	vi.resetModules()
@@ -18,7 +18,7 @@ describe('devtools outside development', () => {
 
 		expect(getDevtools()).toBeUndefined()
 
-		devtools.stop()
+		devtools.detach()
 	})
 
 	it('still exposes itself when asked explicitly', async () => {
@@ -29,6 +29,6 @@ describe('devtools outside development', () => {
 
 		expect(getDevtools()).toBe(devtools)
 
-		devtools.stop()
+		devtools.detach()
 	})
 })

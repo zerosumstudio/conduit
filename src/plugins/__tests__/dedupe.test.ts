@@ -76,12 +76,12 @@ describe('dedupe', () => {
 		const client = createClient({ fetch: deferred.fetch }).with(dedupe())
 
 		const pending = Promise.all([client.get('/me'), client.get('/me')])
-		expect(client.inFlight()).toBe(1)
+		expect(client.getInFlightCount()).toBe(1)
 
 		deferred.resolve(jsonResponse({ id: 1 }))
 		await pending
 
-		expect(client.inFlight()).toBe(0)
+		expect(client.getInFlightCount()).toBe(0)
 	})
 
 	it('lets one participant leave without cancelling the others', async () => {
@@ -146,14 +146,20 @@ describe('dedupe', () => {
 		expect(joins).toEqual(['remote:teacher'])
 	})
 
-	it('honours a custom sharing rule', async () => {
+	it('shares a flight for a POST that says it reads, and for nothing else', async () => {
 		const stub = stubFetch(ok)
-		const client = createClient({ fetch: stub.fetch }).with(
-			dedupe({ shouldDedupe: request => request.method === 'POST' }),
-		)
+		const client = createClient({ fetch: stub.fetch }).with(dedupe())
 
+		await Promise.all([
+			client.post('/search', { a: 1 }, { cacheable: true }),
+			client.post('/search', { a: 1 }, { cacheable: true }),
+		])
 		await Promise.all([client.post('/things', { a: 1 }), client.post('/things', { a: 1 })])
 
-		expect(stub.calls).toHaveLength(1)
+		expect(stub.calls.map(call => new URL(call.url).pathname)).toEqual([
+			'/search',
+			'/things',
+			'/things',
+		])
 	})
 })

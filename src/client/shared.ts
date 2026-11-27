@@ -1,5 +1,5 @@
 import { CONDUIT_VERSION } from '../primitives/version'
-import { consoleLogger, type ConduitLogger } from '../primitives/types'
+import { consoleLogger, type ConduitLogger } from '../primitives/logger'
 
 /*
  *   TYPES
@@ -8,15 +8,15 @@ export interface HotContext {
 	dispose(callback: () => void): void
 }
 
-export interface SharedClientOptions {
-	/** The API contract this bundle was built against. Compared, never reconciled. */
-	contract?: number | string
+export interface SharedClientConfig {
+	/** The API version this bundle was built against. Compared, never reconciled. */
+	apiVersion?: number | string | undefined
 	/** This bundle's own expectation of the shared client's shape. */
-	version?: number
+	clientVersion?: number | undefined
 	/** Routes disagreements somewhere other than the console. */
-	onMismatch?: (report: SharedMismatch) => void
+	onMismatch?: ((report: SharedMismatch) => void) | undefined
 	/** Where the registry's own diagnostics go. Defaults to `console`. */
-	logger?: ConduitLogger
+	logger?: ConduitLogger | undefined
 	/**
 	 * Tears the client down and deregisters it when this module is about to be
 	 * replaced, so a reload during development gets a fresh client rather than
@@ -26,10 +26,10 @@ export interface SharedClientOptions {
 	 * sharedClient('acme.api', factory, { hot: import.meta.hot })
 	 * ```
 	 */
-	hot?: HotContext
+	hot?: HotContext | undefined
 }
 
-export type SharedMismatchKind = 'conduit-version' | 'contract' | 'client-version'
+export type SharedMismatchKind = 'conduit-version' | 'api-version' | 'client-version'
 
 export interface SharedMismatch {
 	readonly key: string
@@ -42,23 +42,34 @@ export interface SharedMismatch {
 interface SharedEntry {
 	client: unknown
 	conduitVersion: string
-	contract: number | string | undefined
-	version: number | undefined
+	apiVersion: number | string | undefined
+	clientVersion: number | undefined
 }
 
 /*
  *   REGISTRY
  ***************************************************************************************************/
-const REGISTRY_KEY = Symbol.for('conduit.sharedClients')
+// One registry per major, so a bundle never gets a client built by another major.
+const REGISTRY_KEY = Symbol.for('conduit.sharedClients.1')
 
 type SharedScope = typeof globalThis & {
 	[REGISTRY_KEY]?: Map<string, SharedEntry>
 }
 
-function registry(): Map<string, SharedEntry> {
+function getRegistry(): Map<string, SharedEntry> {
 	const scope = globalThis as SharedScope
-	scope[REGISTRY_KEY] ??= new Map()
-	return scope[REGISTRY_KEY]
+
+	const existing = scope[REGISTRY_KEY]
+
+	if (existing !== undefined) {
+		return existing
+	}
+
+	const created = new Map<string, SharedEntry>()
+
+	scope[REGISTRY_KEY] = created
+
+	return created
 }
 
 /*
@@ -81,34 +92,31 @@ function isSpent(client: unknown): boolean {
  ***************************************************************************************************/
 /**
  * One client per key for the whole page, built by whoever asks first. A later
- * caller's factory never runs, so pass `contract` and `version` to be told when
- * bundles disagree rather than finding out through a wrong response.
+ * caller's factory never runs, so pass `apiVersion` and `clientVersion` to be
+ * told when bundles disagree rather than finding out through a wrong response.
  *
  * ```ts
  * export const api = sharedClient(
  * 	'acme.api',
  * 	() => createClient({ baseUrl: '/api' }).with(cache()),
- * 	{ contract: 'v1', version: 1 }
+ * 	{ apiVersion: 'v1', clientVersion: 1 }
  * )
  * ```
  */
-export function sharedClient<C>(
-	key: string,
-	factory: () => C,
-	options: SharedClientOptions = {},
-): C {
-	const logger = options.logger ?? consoleLogger
-	const entries = registry()
+export function sharedClient<C>(key: string, factory: () => C, config: SharedClientConfig = {}): C {
+	const logger = config.logger ?? consoleLogger
+	const entries = getRegistry()
 	const existing = entries.get(key)
 
 	if (existing !== undefined && !isSpent(existing.client)) {
-		reconcile(key, existing, options)
+		reconcile(key, existing, config)
+
 		return existing.client as C
 	}
 
 	if (existing !== undefined) {
 		logger.warn(
-			`[conduit] Shared client "${key}" had been destroyed, so a replacement was built. Whoever calls destroy() on a shared client should call releaseSharedClient("${key}") too.`,
+			`[conduit] Shared client "${key}" was destroyed, so a new one was built. Call releaseSharedClient("${key}") when you destroy it.`,
 		)
 	}
 
@@ -117,12 +125,18 @@ export function sharedClient<C>(
 	entries.set(key, {
 		client,
 		conduitVersion: CONDUIT_VERSION,
-		contract: options.contract,
-		version: options.version,
+		apiVersion: config.apiVersion,
+		clientVersion: config.clientVersion,
 	})
 
-	options.hot?.dispose(() => {
+	config.hot?.dispose(() => {
+		// A newer module may have registered its own client under the key by now.
+		if (getRegistry().get(key)?.client !== client) {
+			return
+		}
+
 		const destroyable = client as Destroyable
+
 		destroyable.destroy?.()
 		releaseSharedClient(key)
 	})
@@ -131,27 +145,29 @@ export function sharedClient<C>(
 }
 
 /** Reads a shared client without creating one. `undefined` if nobody has registered it, or it was destroyed. */
+// The caller names the client type, the way response.json<T>() names a body.
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 export function getSharedClient<C>(key: string): C | undefined {
-	const existing = registry().get(key)
+	const existing = getRegistry().get(key)
 
 	return existing !== undefined && !isSpent(existing.client) ? (existing.client as C) : undefined
 }
 
 /** Deregisters one key. Pair it with `destroy()`, or the next bundle gets the dead client. */
 export function releaseSharedClient(key: string): boolean {
-	return registry().delete(key)
+	return getRegistry().delete(key)
 }
 
 /** Empties the registry. For tests: in an app it strands whoever already holds a client. */
 export function clearSharedClients(): void {
-	registry().clear()
+	getRegistry().clear()
 }
 
 /*
  *   RECONCILE
  ***************************************************************************************************/
-function reconcile(key: string, existing: SharedEntry, options: SharedClientOptions): void {
-	const logger = options.logger ?? consoleLogger
+function reconcile(key: string, existing: SharedEntry, config: SharedClientConfig): void {
+	const logger = config.logger ?? consoleLogger
 
 	const report = (
 		kind: SharedMismatchKind,
@@ -161,8 +177,9 @@ function reconcile(key: string, existing: SharedEntry, options: SharedClientOpti
 	): void => {
 		const mismatch: SharedMismatch = { key, kind, existing: from, joining: to, message }
 
-		if (options.onMismatch !== undefined) {
-			options.onMismatch(mismatch)
+		if (config.onMismatch !== undefined) {
+			config.onMismatch(mismatch)
+
 			return
 		}
 
@@ -174,25 +191,25 @@ function reconcile(key: string, existing: SharedEntry, options: SharedClientOpti
 			'conduit-version',
 			existing.conduitVersion,
 			CONDUIT_VERSION,
-			`Shared client "${key}" was created by conduit ${existing.conduitVersion}, but this bundle ships conduit ${CONDUIT_VERSION}. They can disagree about cache and session shape. Align conduit versions across your apps, or share @zerosumstudio/conduit as a singleton in your module federation config.`,
+			`Shared client "${key}" was created by conduit ${existing.conduitVersion}, and this bundle ships ${CONDUIT_VERSION}. Align the versions, or share conduit as a singleton.`,
 		)
 	}
 
-	if (options.contract !== undefined && existing.contract !== options.contract) {
+	if (config.apiVersion !== undefined && existing.apiVersion !== config.apiVersion) {
 		report(
-			'contract',
-			existing.contract,
-			options.contract,
-			`Shared client "${key}" was created against API contract ${String(existing.contract)}, but this bundle was built against ${String(options.contract)}. One of your apps is deployed against a different version of the API.`,
+			'api-version',
+			existing.apiVersion,
+			config.apiVersion,
+			`Shared client "${key}" was built against API ${String(existing.apiVersion)}, and this bundle expects ${String(config.apiVersion)}. Deploy the apps together.`,
 		)
 	}
 
-	if (options.version !== undefined && existing.version !== options.version) {
+	if (config.clientVersion !== undefined && existing.clientVersion !== config.clientVersion) {
 		report(
 			'client-version',
-			existing.version,
-			options.version,
-			`Shared client "${key}" is version ${String(existing.version)}, but this bundle expects version ${options.version}. The existing client stays in use — it cannot be swapped while other apps hold references to it. Deploy these apps together.`,
+			existing.clientVersion,
+			config.clientVersion,
+			`Shared client "${key}" is version ${String(existing.clientVersion)}, and this bundle expects ${config.clientVersion}. The existing client stays in use. Deploy the apps together.`,
 		)
 	}
 }

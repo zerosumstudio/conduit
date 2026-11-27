@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createClient, redactRequest, DEFAULT_REDACTED_HEADERS } from '../core'
-import { timeout, TIMEOUT_META } from '../../plugins/timeout'
+import { createClient } from '../core'
+import { DEFAULT_REDACT, redactRequest, resolveRedact } from '../../http/redact'
+import { timeout } from '../../plugins/timeout'
+import { uploadWithProgress } from '../../upload'
 import type { ConduitRequest } from '../../primitives/types'
 import { hangingFetch, jsonResponse, stubFetch } from '../../__tests__/helpers'
 
@@ -20,7 +22,7 @@ describe('origins', () => {
 
 		const { error } = await client.get('https://evil.test/x').safe()
 
-		expect(error?.code).toBe('CONFIG')
+		expect(error?.code).toBe('ORIGIN_REJECTED')
 		expect(seen).toEqual([])
 	})
 
@@ -38,7 +40,7 @@ describe('origins', () => {
 
 		const { error } = await client.get('//cdn.test/x').safe()
 
-		expect(error?.code).toBe('CONFIG')
+		expect(error?.code).toBe('ORIGIN_REJECTED')
 	})
 })
 
@@ -94,7 +96,7 @@ describe('redact', () => {
 	it('can be widened or narrowed by config.redact', async () => {
 		const client = createClient({
 			fetch: stubFetch(ok).fetch,
-			redact: ['x-api-key'],
+			redact: { headers: ['x-api-key'] },
 		})
 
 		const response = await client
@@ -106,7 +108,7 @@ describe('redact', () => {
 	})
 
 	it('turns redaction off entirely with an empty list', async () => {
-		const client = createClient({ fetch: stubFetch(ok).fetch, redact: [] })
+		const client = createClient({ fetch: stubFetch(ok).fetch, redact: { headers: [] } })
 
 		const response = await client
 			.get('/x', { headers: { authorization: 'Bearer secret' } })
@@ -124,7 +126,7 @@ describe('redact', () => {
 				super(init)
 				built++
 			}
-		} as typeof Headers
+		}
 
 		try {
 			const request: ConduitRequest = {
@@ -141,6 +143,8 @@ describe('redact', () => {
 				lane: 'default',
 				owner: undefined,
 				tags: [],
+				cacheable: true,
+				redactUrl: url => url,
 				parse: 'auto',
 				credentials: undefined,
 				mode: undefined,
@@ -154,7 +158,7 @@ describe('redact', () => {
 			}
 
 			built = 0
-			redactRequest(request, DEFAULT_REDACTED_HEADERS)
+			redactRequest(request, resolveRedact())
 
 			expect(built).toBe(0)
 		} finally {
@@ -162,18 +166,32 @@ describe('redact', () => {
 		}
 	})
 
-	it('exports the default redacted header list', () => {
-		expect(DEFAULT_REDACTED_HEADERS).toEqual(['authorization', 'cookie', 'proxy-authorization'])
+	it('exports the default redaction rules, headers and query names', () => {
+		expect(DEFAULT_REDACT.headers).toEqual([
+			'authorization',
+			'cookie',
+			'proxy-authorization',
+			'x-api-key',
+			'x-auth-token',
+			'x-csrf-token',
+			'x-xsrf-token',
+			'x-session-token',
+			'x-access-token',
+			'x-amz-security-token',
+		])
+		expect(DEFAULT_REDACT.query).toContain('access_token')
 	})
 })
 
 describe('logger', () => {
-	it('routes a DEV path-params warning through config.logger instead of the console', async () => {
+	it('routes a IS_DEVELOPMENT path-params warning through config.logger instead of the console', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const logger = { warn: vi.fn(), error: vi.fn() }
 		const client = createClient({ fetch: stubFetch(ok).fetch, logger })
 
-		await client.get('/x', { params: { unused: '1' } })
+		const path: string = '/x'
+
+		await client.get(path, { params: { unused: '1' } })
 
 		expect(logger.warn).toHaveBeenCalledOnce()
 		expect(warn).not.toHaveBeenCalled()
@@ -195,7 +213,7 @@ describe('logger', () => {
 		client.triggerReset()
 
 		expect(logger.error).toHaveBeenCalledOnce()
-		expect(logger.error.mock.calls[0]?.[0]).toMatch(/A plugin threw while dropping its state/)
+		expect(logger.error.mock.calls[0]?.[0]).toMatch(/A plugin listener threw/)
 	})
 })
 
@@ -238,7 +256,7 @@ describe('client.upload', () => {
 			const client = createClient({ fetch: hangingFetch().fetch }).with(timeout({ ms: 10 }))
 
 			let settled = false
-			client
+			void client
 				.upload('/files', new Blob(['x']))
 				.safe()
 				.then(() => {
@@ -260,7 +278,7 @@ describe('client.upload', () => {
 			const client = createClient({ fetch: hangingFetch().fetch }).with(timeout({ ms: 10 }))
 
 			const pending = client
-				.upload('/files', new Blob(['x']), { meta: { [TIMEOUT_META]: 5 } })
+				.upload('/files', new Blob(['x']), { meta: { timeoutMs: 5 } })
 				.safe()
 
 			await vi.advanceTimersByTimeAsync(5)
@@ -286,13 +304,14 @@ describe('client.upload', () => {
 		expect(seen).toEqual(['POST'])
 	})
 
-	describe('with onProgress', () => {
+	describe('uploadWithProgress', () => {
 		class FakeXhr extends EventTarget {
 			static instances: FakeXhr[] = []
 			readonly upload = new EventTarget()
 			status = 200
 			statusText = 'OK'
-			response: unknown = new Blob(['{"ok":true}'])
+			// A string stands in for the Blob a real XHR hands over, since jsdom's Blob is not one fetch's Response can read.
+			response: unknown = '{"ok":true}'
 			responseType = ''
 			withCredentials = false
 
@@ -329,7 +348,7 @@ describe('client.upload', () => {
 			const client = createClient({ fetch: stub.fetch })
 			const onProgress = vi.fn()
 
-			const pending = client.upload('/files', new Blob(['x']), { onProgress })
+			const pending = uploadWithProgress(client, '/files', new Blob(['x']), { onProgress })
 
 			FakeXhr.instances[0]?.upload.dispatchEvent(
 				Object.assign(new Event('progress'), {

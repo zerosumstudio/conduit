@@ -10,6 +10,30 @@ export interface FetchStub {
 	calls: FetchCall[]
 }
 
+function abortError(): Error {
+	const error = new Error('The operation was aborted.')
+
+	error.name = 'AbortError'
+
+	return error
+}
+
+/** Rejects now if the signal is spent, and when it fires otherwise, as a real fetch does. */
+function rejectOnAbort(
+	signal: AbortSignal | null | undefined,
+	reject: (error: unknown) => void,
+): void {
+	if (signal?.aborted === true) {
+		reject(abortError())
+
+		return
+	}
+
+	signal?.addEventListener('abort', () => {
+		reject(abortError())
+	})
+}
+
 export function stubFetch(handler: (call: FetchCall) => Response | Promise<Response>): FetchStub {
 	const calls: FetchCall[] = []
 
@@ -17,6 +41,7 @@ export function stubFetch(handler: (call: FetchCall) => Response | Promise<Respo
 		calls,
 		fetch: (url, init) => {
 			calls.push({ url, init })
+
 			return Promise.resolve(handler({ url, init }))
 		},
 	}
@@ -26,11 +51,7 @@ export function hangingFetch(): FetchStub {
 	return stubFetch(
 		({ init }) =>
 			new Promise<Response>((_resolve, reject) => {
-				init.signal?.addEventListener('abort', () => {
-					const error = new Error('The operation was aborted.')
-					error.name = 'AbortError'
-					reject(error)
-				})
+				rejectOnAbort(init.signal, reject)
 			}),
 	)
 }
@@ -55,12 +76,7 @@ export function deferredFetch(): DeferredFetch {
 
 			return new Promise<Response>((resolve, reject) => {
 				outstanding = { resolve, reject }
-
-				init.signal?.addEventListener('abort', () => {
-					const error = new Error('The operation was aborted.')
-					error.name = 'AbortError'
-					reject(error)
-				})
+				rejectOnAbort(init.signal, reject)
 			})
 		},
 		resolve: response => outstanding?.resolve(response),

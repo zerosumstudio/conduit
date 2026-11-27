@@ -32,31 +32,31 @@ describe('encodeBody', () => {
 		expect(encodeBody(42)).toEqual({ body: '42', contentType: 'application/json' })
 	})
 
-	it('refuses a function body with CONFIG rather than a confusing JSON failure', () => {
+	it('refuses a function body with INVALID_ARGUMENT rather than a confusing JSON failure', () => {
 		expect(() => encodeBody(() => {})).toThrow(ConduitError)
 		expect(() => encodeBody(() => {})).toThrow(/function cannot be a request body/)
 	})
 
-	it('refuses a symbol body with CONFIG', () => {
+	it('refuses a symbol body with INVALID_ARGUMENT', () => {
 		expect(() => encodeBody(Symbol('x'))).toThrow(/symbol cannot be a request body/)
 	})
 
-	it('refuses a bigint body with CONFIG', () => {
+	it('refuses a bigint body with INVALID_ARGUMENT', () => {
 		expect(() => encodeBody(10n)).toThrow(/bigint cannot be a request body/)
 	})
 
-	it('refuses a circular body with CONFIG instead of letting JSON.stringify throw raw', () => {
+	it('refuses a circular body with INVALID_ARGUMENT instead of letting JSON.stringify throw raw', () => {
 		const circular: Record<string, unknown> = { a: 1 }
 		circular['self'] = circular
 
 		expect(() => encodeBody(circular)).toThrow(ConduitError)
-		expect(() => encodeBody(circular)).toThrow(/could not be JSON-encoded/)
+		expect(() => encodeBody(circular)).toThrow(/not JSON-encodable/)
 
 		try {
 			encodeBody(circular)
 			expect.unreachable('expected encodeBody to throw')
 		} catch (error) {
-			expect((error as ConduitError).code).toBe('CONFIG')
+			expect((error as ConduitError).code).toBe('INVALID_ARGUMENT')
 			expect((error as ConduitError).cause).toBeInstanceOf(Error)
 		}
 	})
