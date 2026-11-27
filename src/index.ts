@@ -1,42 +1,35 @@
 /*
  *   CLIENT
  ***************************************************************************************************/
-export { Client, createClient, redactRequest, DEFAULT_REDACTED_HEADERS } from './client/core'
+export { createClient } from './client/core'
+export type { Client } from './client/core'
 export { defaults } from './client/defaults'
-export type { DefaultsConfig, DefaultsWithSession, DefaultStack } from './client/defaults'
-export { createScope } from './client/scopes'
-export type { Scope, ScopeInit } from './client/scopes'
-export { createMethods, bodyOptions } from './client/methods'
-export type { Executor } from './client/methods'
-export {
-	sharedClient,
-	getSharedClient,
-	releaseSharedClient,
-	clearSharedClients,
-} from './client/shared'
+export type { DefaultClient, DefaultsConfig, DefaultsWithSession } from './client/defaults'
+export type { Scope } from './client/scopes'
+export { sharedClient, getSharedClient, releaseSharedClient } from './client/shared'
 export type {
 	HotContext,
-	SharedClientOptions,
+	SharedClientConfig,
 	SharedMismatch,
 	SharedMismatchKind,
 } from './client/shared'
-export { defineEndpoint, resolveEndpointTags } from './client/endpoint'
-export type { Endpoint, EndpointDefinition, StandardSchemaV1 } from './client/endpoint'
+export { defineEndpoint } from './client/endpoint'
+export type { Endpoint, EndpointDefinition, PathVars, StandardSchemaV1 } from './client/endpoint'
 
 /*
  *   PLUGINS
  ***************************************************************************************************/
-export { cache, CACHE_META } from './plugins/cache'
+export { cache } from './plugins/cache'
 export type { CacheApi, CacheConfig } from './plugins/cache'
-export { dedupe, DEDUPE_META } from './plugins/dedupe'
-export type { DedupeApi, DedupeConfig } from './plugins/dedupe'
+export { dedupe } from './plugins/dedupe'
+export type { DedupeApi } from './plugins/dedupe'
 export { retry } from './plugins/retry'
 export type { RetryConfig, RetryInfo } from './plugins/retry'
-export { timeout, TIMEOUT_META } from './plugins/timeout'
+export { timeout } from './plugins/timeout'
 export type { TimeoutConfig } from './plugins/timeout'
-export { queue, QUEUE_META } from './plugins/queue'
+export { queue } from './plugins/queue'
 export type { QueueApi, QueueConfig } from './plugins/queue'
-export { session, SESSION_META } from './plugins/session'
+export { session } from './plugins/session'
 export type {
 	AdapterContext,
 	SessionAdapter,
@@ -46,66 +39,41 @@ export type {
 	SessionState,
 	SessionStatus,
 } from './plugins/session'
-export { contract } from './plugins/contract'
-export type { ContractConfig, ContractMismatch } from './plugins/contract'
+export { apiVersion } from './plugins/api-version'
+export type { ApiVersionConfig, ApiVersionMismatch } from './plugins/api-version'
 export { observable } from './plugins/observable'
 export type { ObservableApi, ObservableConfig, QueryState, QueryStatus } from './plugins/observable'
+export { requestId } from './plugins/request-id'
+export type { RequestIdConfig } from './plugins/request-id'
 
 /*
  *   HTTP
  ***************************************************************************************************/
-export { compose } from './http/pipeline'
-export { createRequest, withRequest } from './http/request'
-export type { RequestRecordInit } from './http/request'
-export { conduitPromise } from './http/promise'
-export { createFetchTransport } from './http/transport'
-export {
-	deriveKey,
-	deriveVariance,
-	fingerprintHeaders,
-	canonicalUrl,
-	bodyFingerprint,
-	fnv1a,
-} from './http/keys'
-export type { KeyInputs } from './http/keys'
-export {
-	buildUrl,
-	joinUrl,
-	appendQuery,
-	applyPathParams,
-	isAbsoluteUrl,
-	stripQuery,
-} from './http/url'
-export { encodeBody } from './http/body'
-export type { EncodedBody } from './http/body'
-export { composeSignals } from './http/signals'
-export type { ComposedSignal } from './http/signals'
-export { toAbortError } from './http/abort'
-export { createXhrFetch } from './http/xhr'
-export type { UploadProgressEvent, XhrFetchOptions } from './http/xhr'
+export { withRequest } from './http/request'
+export { DEFAULT_REDACT } from './http/redact'
+export type { RedactRules } from './http/redact'
 
 /*
- *   PRIMITIVES
+ *   ERRORS
  ***************************************************************************************************/
-export {
-	ConduitError,
-	ERROR_CODES,
-	isConduitError,
-	isErrorCode,
-	toConduitError,
-} from './primitives/errors'
+export { ConduitError, isConduitError, isErrorCode, toConduitError } from './primitives/errors'
 export type { ConduitErrorCode, ConduitErrorInit, ConduitErrorJson } from './primitives/errors'
-export { createEventBus, elapsed } from './primitives/events'
+
+/*
+ *   TYPES
+ ***************************************************************************************************/
 export type {
+	ApiVersionMismatchEvent,
 	CacheHitEvent,
 	CacheInvalidateEvent,
 	CacheMissEvent,
+	CacheSetEvent,
 	CacheStaleEvent,
 	ClientDestroyEvent,
+	ClientEvents,
 	ConduitEvent,
 	ConduitEventMap,
 	ConduitEventType,
-	ContractMismatchEvent,
 	DedupeJoinEvent,
 	EventBus,
 	QueueEnqueueEvent,
@@ -116,32 +84,32 @@ export type {
 	SessionChangeEvent,
 	Unsubscribe,
 } from './primitives/events'
-export { createStore } from './primitives/stores'
-export type { ReadableStore, WritableStore } from './primitives/stores'
-export { protect } from './primitives/freeze'
-export { CONDUIT_VERSION } from './primitives/version'
-export { IDEMPOTENT_METHODS, consoleLogger } from './primitives/types'
+export type { ReadableStore } from './primitives/stores'
 export type {
+	CacheChange,
 	ClientConfig,
-	ClientContext,
 	ConduitLogger,
 	ConduitMeta,
 	ConduitPromise,
 	ConduitRequest,
 	ConduitResponse,
-	EmptyExtension,
 	FetchLike,
 	HttpMethod,
 	Lane,
-	LiteralUnion,
 	MethodOptions,
 	Middleware,
+	NoExtension,
+	PluginContext,
 	Next,
+	OptionsArgs,
 	ParseMode,
+	PathParamNames,
 	PathParams,
+	PathParamsOf,
 	Plugin,
 	Query,
 	QueryValue,
+	RedactConfig,
 	RequestInitPassthrough,
 	RequestMethods,
 	RequestOptions,

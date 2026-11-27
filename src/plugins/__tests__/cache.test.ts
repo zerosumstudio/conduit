@@ -23,7 +23,7 @@ describe('cache', () => {
 
 	it('refetches once the entry is no longer fresh', async () => {
 		const stub = stubFetch(ok)
-		const client = createClient({ fetch: stub.fetch }).with(cache({ ttl: 0 }))
+		const client = createClient({ fetch: stub.fetch }).with(cache({ ttlMs: 0 }))
 
 		await client.get('/me')
 		await client.get('/me')
@@ -80,13 +80,13 @@ describe('cache', () => {
 		let version = 1
 		const stub = stubFetch(() => jsonResponse({ version: version++ }))
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true }),
+			cache({ ttlMs: 0, staleMs: Infinity }),
 		)
 
 		expect(await client.get('/me')).toEqual({ version: 1 })
 
 		const stale = await client.get('/me').response()
-		expect(stale.from).toBe('cache')
+		expect(stale.from).toBe('stale')
 		expect(stale.data).toEqual({ version: 1 })
 
 		await flush()
@@ -98,7 +98,7 @@ describe('cache', () => {
 	it('runs one refresh, not one per reader', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true }),
+			cache({ ttlMs: 0, staleMs: Infinity }),
 		)
 
 		await client.get('/me')
@@ -116,7 +116,7 @@ describe('cache', () => {
 			return calls === 1 ? jsonResponse({ id: 1 }) : jsonResponse({}, 500)
 		})
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true }),
+			cache({ ttlMs: 0, staleMs: Infinity }),
 		)
 
 		await client.get('/me')
@@ -134,7 +134,7 @@ describe('cache', () => {
 		await client.get('/b')
 		await client.get('/c')
 
-		expect(client.cacheSize()).toBe(2)
+		expect(client.getCacheSize()).toBe(2)
 
 		await client.get('/a')
 		expect(stub.calls).toHaveLength(4)
@@ -162,8 +162,8 @@ describe('cache', () => {
 
 		await client.get('/me')
 
-		expect(client.invalidate('GET /api/me')).toBe(true)
-		expect(client.invalidate('GET /api/me')).toBe(false)
+		expect(client.invalidate(client.getKey('/me'))).toBe(true)
+		expect(client.invalidate(client.getKey('/me'))).toBe(false)
 
 		await client.get('/me')
 		expect(stub.calls).toHaveLength(2)
@@ -178,7 +178,7 @@ describe('cache', () => {
 		await client.get('/settings', { tags: ['settings'] })
 
 		expect(client.invalidateTag('user')).toBe(2)
-		expect(client.cacheSize()).toBe(1)
+		expect(client.getCacheSize()).toBe(1)
 	})
 
 	it('clears everything', async () => {
@@ -189,7 +189,7 @@ describe('cache', () => {
 
 		client.clearCache()
 
-		expect(client.cacheSize()).toBe(0)
+		expect(client.getCacheSize()).toBe(0)
 	})
 
 	it('freezes what it hands out, so one reader cannot corrupt another', async () => {
@@ -242,13 +242,13 @@ describe('cache', () => {
 		expect(stub.calls).toHaveLength(2)
 	})
 
-	it('does not bypass entirely: "refresh" still respects shouldCache', async () => {
+	it('does not bypass entirely: "refresh" still respects cacheable', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch }).with(cache())
 
 		await client.post('/things', { a: 1 }, { meta: { cache: 'refresh' } })
 
-		expect(client.cacheSize()).toBe(0)
+		expect(client.getCacheSize()).toBe(0)
 	})
 
 	it('writes a value directly and returns the previous one for rollback', async () => {
@@ -257,7 +257,7 @@ describe('cache', () => {
 
 		await client.get('/me')
 
-		const previous = client.setData<{ id: number }>(client.keyFor('/me'), { id: 99 })
+		const previous = client.setData<{ id: number }>(client.getKey('/me'), { id: 99 })
 
 		expect(previous).toEqual({ id: 1 })
 
@@ -276,7 +276,7 @@ describe('cache', () => {
 		}))
 
 		expect(previous).toBeUndefined()
-		expect(client.cacheSize()).toBe(1)
+		expect(client.getCacheSize()).toBe(1)
 
 		const created = client.setData<{ id: number }>('GET /new', current => ({
 			id: (current?.id ?? 0) + 1,
@@ -298,7 +298,7 @@ describe('cache', () => {
 
 	it('reports a stale read separately from a hit', async () => {
 		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true }),
+			cache({ ttlMs: 0, staleMs: Infinity }),
 		)
 		const stale = vi.fn()
 
@@ -309,30 +309,64 @@ describe('cache', () => {
 		await flush()
 
 		expect(stale).toHaveBeenCalledOnce()
-		expect(stale.mock.calls[0]?.[0]).toMatchObject({ revalidating: true })
+		expect(stale.mock.calls[0]?.[0]).toMatchObject({ isRevalidating: true })
 	})
 })
 
 describe('cache defaults', () => {
-	it('stores a tagged POST, so an invalidation can reach it', async () => {
+	// M3: tags used to switch caching on, so a tagged POST never reached the server twice
+	it('does not store a tagged POST, since tags only label', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch }).with(cache())
 
-		await client.post('/search', { q: 'a' }, { tags: ['search'] })
-		await client.post('/search', { q: 'a' }, { tags: ['search'] })
-		expect(stub.calls).toHaveLength(1)
+		await client.post('/toggle', { x: 1 }, { tags: ['t'] })
+		await client.post('/toggle', { x: 1 }, { tags: ['t'] })
 
-		client.invalidateTag('search')
-		await client.post('/search', { q: 'a' }, { tags: ['search'] })
+		expect(stub.calls).toHaveLength(2)
+		expect(client.getCacheSize()).toBe(0)
+	})
+
+	it('does not store a tagged DELETE either', async () => {
+		const stub = stubFetch(ok)
+		const client = createClient({ fetch: stub.fetch }).with(cache())
+
+		await client.delete('/things/1', { tags: ['things'] })
+		await client.delete('/things/1', { tags: ['things'] })
+
 		expect(stub.calls).toHaveLength(2)
 	})
 
-	it('still skips an untagged POST', async () => {
+	it('stores a POST that says it reads, and lets its tag invalidate it', async () => {
+		const stub = stubFetch(ok)
+		const client = createClient({ fetch: stub.fetch }).with(cache())
+		const search = { tags: ['search'], cacheable: true }
+
+		await client.post('/search', { q: 'a' }, search)
+		await client.post('/search', { q: 'a' }, search)
+		expect(stub.calls).toHaveLength(1)
+
+		client.invalidateTag('search')
+		await client.post('/search', { q: 'a' }, search)
+		expect(stub.calls).toHaveLength(2)
+	})
+
+	it('can turn caching off for a GET', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch }).with(cache())
 
-		await client.post('/search', { q: 'a' })
-		await client.post('/search', { q: 'a' })
+		await client.get('/live', { cacheable: false })
+		await client.get('/live', { cacheable: false })
+
 		expect(stub.calls).toHaveLength(2)
+	})
+
+	it('labels a stale answer apart from a fresh hit', async () => {
+		const client = createClient({ fetch: stubFetch(ok).fetch }).with(
+			cache({ ttlMs: 60_000, staleMs: Infinity }),
+		)
+
+		await client.get('/me')
+
+		expect((await client.get('/me').response()).from).toBe('cache')
 	})
 })

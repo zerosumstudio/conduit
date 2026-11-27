@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-	consoleLogger,
-	type ConduitRequest,
-	type ResolvedClientConfig,
-} from '../../primitives/types'
+import { consoleLogger } from '../../primitives/logger'
+import type { ConduitRequest, ResolvedClientConfig } from '../../primitives/types'
+import { createOriginPolicy } from '../origin'
 import { createFetchTransport } from '../transport'
 import { createRequest } from '../request'
 import { jsonResponse } from '../../__tests__/helpers'
@@ -27,15 +25,20 @@ function resolvedConfig(overrides: Partial<ResolvedClientConfig> = {}): Resolved
 		referrerPolicy: undefined,
 		integrity: undefined,
 		origins: [],
-		redact: [],
+		redact: { headers: [], query: [] },
+		credentialHeaders: [],
 		logger: consoleLogger,
 		...overrides,
 	}
 }
 
+function transportFor(config: ResolvedClientConfig): ReturnType<typeof createFetchTransport> {
+	return createFetchTransport(config, createOriginPolicy('http://localhost:3000', []))
+}
+
 function request(overrides: Partial<ConduitRequest> = {}): ConduitRequest {
 	return createRequest({
-		url: '/x',
+		url: 'http://localhost:3000/x',
 		method: 'GET',
 		body: null,
 		signal: new AbortController().signal,
@@ -44,6 +47,7 @@ function request(overrides: Partial<ConduitRequest> = {}): ConduitRequest {
 		lane: 'default',
 		owner: undefined,
 		tags: [],
+		cacheable: true,
 		parse: 'auto',
 		credentials: undefined,
 		mode: undefined,
@@ -61,21 +65,19 @@ function request(overrides: Partial<ConduitRequest> = {}): ConduitRequest {
 
 describe('createFetchTransport', () => {
 	it('reads formData when parse resolves to it', async () => {
-		const form = new FormData()
-		form.set('a', '1')
-		const response = new Response(form)
-		const transport = createFetchTransport(
-			resolvedConfig({ fetch: () => Promise.resolve(response) }),
-		)
+		const response = new Response('a=1', {
+			headers: { 'content-type': 'application/x-www-form-urlencoded' },
+		})
+		const transport = transportFor(resolvedConfig({ fetch: () => Promise.resolve(response) }))
 
 		const result = await transport(request({ parse: 'formData' }))
 
-		expect(result.data).toBeInstanceOf(FormData)
+		expect((result.data as { get(name: string): unknown }).get('a')).toBe('1')
 	})
 
 	it('sets duplex: half only when the body is a stream', async () => {
 		const seen: RequestInit[] = []
-		const transport = createFetchTransport(
+		const transport = transportFor(
 			resolvedConfig({
 				fetch: (_url, init) => {
 					seen.push(init)
@@ -92,7 +94,7 @@ describe('createFetchTransport', () => {
 
 	it('does not set duplex for an ordinary body', async () => {
 		const seen: RequestInit[] = []
-		const transport = createFetchTransport(
+		const transport = transportFor(
 			resolvedConfig({
 				fetch: (_url, init) => {
 					seen.push(init)
@@ -108,7 +110,7 @@ describe('createFetchTransport', () => {
 
 	it('passes every RequestInit field the request carries through to fetch', async () => {
 		const seen: RequestInit[] = []
-		const transport = createFetchTransport(
+		const transport = transportFor(
 			resolvedConfig({
 				fetch: (_url, init) => {
 					seen.push(init)
@@ -142,7 +144,7 @@ describe('createFetchTransport', () => {
 
 	it('leaves those fields unset when the request does not carry them', async () => {
 		const seen: RequestInit[] = []
-		const transport = createFetchTransport(
+		const transport = transportFor(
 			resolvedConfig({
 				fetch: (_url, init) => {
 					seen.push(init)
@@ -162,7 +164,7 @@ describe('createFetchTransport', () => {
 		expect(seen[0]).not.toHaveProperty('integrity')
 	})
 
-	it('reports a body that fails to decode while the signal is aborted as ABORTED, not PARSE', async () => {
+	it('reports a body that fails to decode while the signal is aborted as ABORTED, not PARSE_FAILED', async () => {
 		const controller = new AbortController()
 		const badResponse = new Response(
 			new ReadableStream({
@@ -173,7 +175,7 @@ describe('createFetchTransport', () => {
 			{ headers: { 'content-type': 'application/octet-stream' } },
 		)
 
-		const transport = createFetchTransport(
+		const transport = transportFor(
 			resolvedConfig({
 				fetch: () => {
 					controller.abort()
@@ -187,7 +189,7 @@ describe('createFetchTransport', () => {
 		).rejects.toMatchObject({ code: 'ABORTED' })
 	})
 
-	it('still reports a genuine decode failure as PARSE when nothing was aborted', async () => {
+	it('still reports a genuine decode failure as PARSE_FAILED when nothing was aborted', async () => {
 		const badResponse = new Response(
 			new ReadableStream({
 				start(streamController) {
@@ -197,19 +199,17 @@ describe('createFetchTransport', () => {
 			{ headers: { 'content-type': 'application/octet-stream' } },
 		)
 
-		const transport = createFetchTransport(
+		const transport = transportFor(
 			resolvedConfig({ fetch: () => Promise.resolve(badResponse) }),
 		)
 
 		await expect(transport(request({ parse: 'arrayBuffer' }))).rejects.toMatchObject({
-			code: 'PARSE',
+			code: 'PARSE_FAILED',
 		})
 	})
 
 	it('reports a rejection that is not even an Error as NETWORK', async () => {
-		const transport = createFetchTransport(
-			resolvedConfig({ fetch: () => Promise.reject('offline') }),
-		)
+		const transport = transportFor(resolvedConfig({ fetch: () => Promise.reject('offline') }))
 
 		await expect(transport(request())).rejects.toMatchObject({ code: 'NETWORK' })
 	})
@@ -224,12 +224,12 @@ describe('createFetchTransport', () => {
 			{ status: 500, headers: { 'content-type': 'application/octet-stream' } },
 		)
 
-		const transport = createFetchTransport(
+		const transport = transportFor(
 			resolvedConfig({ fetch: () => Promise.resolve(badResponse) }),
 		)
 
 		await expect(transport(request({ parse: 'arrayBuffer' }))).rejects.toMatchObject({
-			code: 'HTTP_ERROR',
+			code: 'HTTP_STATUS',
 			body: undefined,
 		})
 	})

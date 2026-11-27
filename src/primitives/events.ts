@@ -1,19 +1,8 @@
-import { DEV } from './dev'
-import type { ConduitError } from './errors'
-import {
-	consoleLogger,
-	type ConduitLogger,
-	type ConduitRequest,
-	type ConduitResponse,
-} from './types'
-
-/*
- *   CLOCK
- ***************************************************************************************************/
-const monotonic: () => number =
-	typeof performance !== 'undefined' && typeof performance.now === 'function'
-		? () => performance.now()
-		: () => Date.now()
+import type { ConduitError, ConduitErrorCode } from './errors'
+import type { ApiVersionMismatch } from '../plugins/api-version'
+import type { SessionStatus } from '../plugins/session'
+import { consoleLogger, reportError, type ConduitLogger } from './logger'
+import type { ConduitRequest, ConduitResponse, Lane } from './types'
 
 /*
  *   EVENTS
@@ -30,7 +19,7 @@ export interface RequestSettleEvent {
 	readonly request: ConduitRequest
 	readonly response: ConduitResponse
 	/** Milliseconds across the whole pipeline, not just the network. */
-	readonly duration: number
+	readonly durationMs: number
 	readonly at: number
 }
 
@@ -38,7 +27,7 @@ export interface RequestErrorEvent {
 	readonly type: 'request:error'
 	readonly request: ConduitRequest
 	readonly error: ConduitError
-	readonly duration: number
+	readonly durationMs: number
 	readonly at: number
 }
 
@@ -70,7 +59,7 @@ export interface CacheStaleEvent {
 	readonly key: string
 	readonly owner: string | undefined
 	/** Whether a background refresh was started, or one was already running. */
-	readonly revalidating: boolean
+	readonly isRevalidating: boolean
 	readonly at: number
 }
 
@@ -79,6 +68,13 @@ export interface CacheInvalidateEvent {
 	/** A key, a `tag:name`, or `*` for a full clear. */
 	readonly target: string
 	readonly removed: number
+	readonly at: number
+}
+
+export interface CacheSetEvent {
+	readonly type: 'cache:set'
+	readonly key: string
+	readonly data: unknown
 	readonly at: number
 }
 
@@ -94,7 +90,7 @@ export interface QueueEnqueueEvent {
 	readonly type: 'queue:enqueue'
 	readonly key: string
 	readonly owner: string | undefined
-	readonly lane: string
+	readonly lane: Lane
 	/** How many were already waiting when this one joined. */
 	readonly depth: number
 	readonly at: number
@@ -102,18 +98,14 @@ export interface QueueEnqueueEvent {
 
 export interface SessionChangeEvent {
 	readonly type: 'session:change'
-	readonly status: 'unknown' | 'loading' | 'authenticated' | 'anonymous' | 'error'
-	/** True once the session is gone and cannot be recovered here. */
-	readonly terminal: boolean
+	readonly status: SessionStatus
+	/** True when the session was lost: signed out by a failed renewal, not by a read that found nobody. */
+	readonly isLost: boolean
 	readonly at: number
 }
 
-export interface ContractMismatchEvent {
-	readonly type: 'contract:mismatch'
-	/** What this bundle was built against. */
-	readonly expected: string
-	/** What the server reported. */
-	readonly actual: string
+export interface ApiVersionMismatchEvent extends ApiVersionMismatch {
+	readonly type: 'api-version:mismatch'
 	readonly at: number
 }
 
@@ -123,8 +115,8 @@ export interface RetryAttemptEvent {
 	readonly owner: string | undefined
 	/** The attempt that just failed. */
 	readonly attempt: number
-	readonly delay: number
-	readonly reason: string
+	readonly delayMs: number
+	readonly code: ConduitErrorCode
 	readonly at: number
 }
 
@@ -148,17 +140,21 @@ export interface ConduitEventMap {
 	'cache:miss': CacheMissEvent
 	'cache:stale': CacheStaleEvent
 	'cache:invalidate': CacheInvalidateEvent
+	'cache:set': CacheSetEvent
 	'dedupe:join': DedupeJoinEvent
 	'retry:attempt': RetryAttemptEvent
 	'queue:enqueue': QueueEnqueueEvent
 	'session:change': SessionChangeEvent
-	'contract:mismatch': ContractMismatchEvent
+	'api-version:mismatch': ApiVersionMismatchEvent
 }
 
 export type ConduitEventType = keyof ConduitEventMap
 export type ConduitEvent = ConduitEventMap[ConduitEventType]
 
 export type Unsubscribe = () => void
+
+/** What a remote sees of the bus: it can listen, and nothing else. Plugins get the whole `EventBus`. */
+export type ClientEvents = Pick<EventBus, 'active' | 'on' | 'onAny'>
 
 export interface EventBus {
 	/** Whether anything is listening. Guard emission with it, rather than building events for nobody. */
@@ -188,11 +184,7 @@ export function createEventBus(logger: ConduitLogger = consoleLogger): EventBus 
 		try {
 			listener(event)
 		} catch (error) {
-			if (DEV) {
-				logger.error(
-					`[conduit] An event listener threw. The request is unaffected. ${String(error)}`,
-				)
-			}
+			reportError(logger, 'An event listener threw. The request is unaffected.', error)
 		}
 	}
 
@@ -201,14 +193,14 @@ export function createEventBus(logger: ConduitLogger = consoleLogger): EventBus 
 		bucket.set(id, listener)
 		count++
 
-		let removed = false
+		let isRemoved = false
 
 		return () => {
-			if (removed || !bucket.delete(id)) {
+			if (isRemoved || !bucket.delete(id)) {
 				return
 			}
 
-			removed = true
+			isRemoved = true
 			count--
 		}
 	}
@@ -269,7 +261,7 @@ export function createEventBus(logger: ConduitLogger = consoleLogger): EventBus 
 /*
  *   TIMING
  ***************************************************************************************************/
-/** Monotonic milliseconds, for durations. Falls back to `Date.now` where `performance` is absent. */
-export function elapsed(): number {
-	return monotonic()
+/** Monotonic milliseconds, for durations. */
+export function getMonotonicTime(): number {
+	return performance.now()
 }

@@ -99,7 +99,11 @@ describe('request identity', () => {
 		let shard = 'a'
 
 		const route: Middleware = async (request, next) =>
-			next(withRequest(request, { url: `/shard-${shard}${request.url}` }))
+			next(
+				withRequest(request, {
+					url: `http://localhost:3000/shard-${shard}${new URL(request.url).pathname}`,
+				}),
+			)
 
 		const client = createClient({ fetch: stub.fetch })
 			.with({ name: 'route', middleware: route })
@@ -109,7 +113,10 @@ describe('request identity', () => {
 		shard = 'b'
 		await client.get('/orders')
 
-		expect(stub.calls.map(call => call.url)).toEqual(['/shard-a/orders', '/shard-b/orders'])
+		expect(stub.calls.map(call => call.url)).toEqual([
+			'http://localhost:3000/shard-a/orders',
+			'http://localhost:3000/shard-b/orders',
+		])
 	})
 
 	it('leaves the key alone when a middleware sets one explicitly', () => {
@@ -123,6 +130,7 @@ describe('request identity', () => {
 			lane: 'default',
 			owner: undefined,
 			tags: [],
+			cacheable: true,
 			parse: 'auto',
 			credentials: undefined,
 			mode: undefined,
@@ -159,7 +167,9 @@ describe('literal colons in paths', () => {
 
 		await client.post('/v1/models/gemini-pro:generateContent', { prompt: 'hi' })
 
-		expect(stub.calls[0]?.url).toBe('/v1/models/gemini-pro:generateContent')
+		expect(stub.calls[0]?.url).toBe(
+			'http://localhost:3000/v1/models/gemini-pro:generateContent',
+		)
 	})
 
 	it('ignores a colon inside a query string', async () => {
@@ -168,16 +178,17 @@ describe('literal colons in paths', () => {
 
 		await client.get('/notes?q=label:urgent')
 
-		expect(stub.calls[0]?.url).toBe('/notes?q=label:urgent')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/notes?q=label:urgent')
 	})
 
-	it('ignores credentials in an authority', async () => {
+	it('refuses credentials in an authority, which fetch would reject as a TypeError', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch, origins: ['https://host.test'] })
 
-		await client.get('https://user:pass@host.test/x')
+		const { error } = await client.get('https://user:pass@host.test/x').safe()
 
-		expect(stub.calls[0]?.url).toBe('https://user:pass@host.test/x')
+		expect(error?.code).toBe('ORIGIN_REJECTED')
+		expect(stub.calls).toHaveLength(0)
 	})
 
 	it('still substitutes a placeholder that starts a segment', async () => {
@@ -186,7 +197,7 @@ describe('literal colons in paths', () => {
 
 		await client.get('/users/:id', { params: { id: 7 } })
 
-		expect(stub.calls[0]?.url).toBe('/users/7')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/users/7')
 	})
 
 	it('escapes a literal segment that has to begin with a colon', async () => {
@@ -195,7 +206,7 @@ describe('literal colons in paths', () => {
 
 		await client.get('/tags/::literal')
 
-		expect(stub.calls[0]?.url).toBe('/tags/:literal')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/tags/:literal')
 	})
 })
 
@@ -213,7 +224,7 @@ describe('failing responses', () => {
 
 		const { error } = await client.get('/x').safe()
 
-		expect(error?.code).toBe('HTTP_ERROR')
+		expect(error?.code).toBe('HTTP_STATUS')
 		expect(error?.status).toBe(503)
 		expect(error?.body).toBe('<html>maintenance</html>')
 	})
@@ -232,7 +243,7 @@ describe('failing responses', () => {
 						: jsonResponse({ ok: true }),
 				)
 			},
-		}).with(retry({ baseDelay: 1, jitter: false }))
+		}).with(retry({ baseDelayMs: 1, jitter: false }))
 
 		await expect(client.get('/x')).resolves.toEqual({ ok: true })
 		expect(calls).toBe(2)
@@ -246,7 +257,7 @@ describe('failing responses', () => {
 				),
 		})
 
-		expect((await client.get('/x').safe()).error?.code).toBe('PARSE')
+		expect((await client.get('/x').safe()).error?.code).toBe('PARSE_FAILED')
 	})
 })
 
@@ -255,7 +266,7 @@ describe('cache lifetime', () => {
 		let version = 1
 		const stub = stubFetch(() => jsonResponse({ version: version++ }))
 		const client = createClient({ fetch: stub.fetch }).with(
-			cache({ ttl: 0, staleWhileRevalidate: true }),
+			cache({ ttlMs: 0, staleMs: Infinity }),
 		)
 
 		await client.get('/me')
@@ -275,16 +286,16 @@ describe('cache lifetime', () => {
 
 		const pending = client.get('/todos')
 
-		client.invalidate('GET /todos')
+		client.invalidate(client.getKey('/todos'))
 		deferred.resolve(jsonResponse({ items: ['stale'] }))
 		await pending
 
-		expect(client.cacheSize()).toBe(0)
+		expect(client.getCacheSize()).toBe(0)
 	})
 
 	it('keeps tags an earlier caller registered when a later one refetches without them', async () => {
 		const stub = stubFetch(ok)
-		const client = createClient({ fetch: stub.fetch }).with(cache({ ttl: 0 }))
+		const client = createClient({ fetch: stub.fetch }).with(cache({ ttlMs: 0 }))
 
 		await client.get('/users/1', { tags: ['user'] })
 		await client.get('/users/1')
@@ -371,7 +382,7 @@ describe('abort handling', () => {
 	it('gives up on a backoff that was cancelled before it started', async () => {
 		const client = createClient({
 			fetch: () => Promise.resolve(jsonResponse({}, 503)),
-		}).with(retry({ attempts: 5, baseDelay: 10_000, jitter: false }))
+		}).with(retry({ attempts: 5, baseDelayMs: 10_000, jitter: false }))
 
 		const scope = client.scope('remote:profile')
 		const pending = scope.get('/x').safe()
@@ -392,7 +403,7 @@ describe('retry budget', () => {
 					new Response('', { status: 429, headers: { 'retry-after': '3600' } }),
 				)
 			},
-		}).with(retry({ attempts: 3, maxDelay: 5_000 }))
+		}).with(retry({ attempts: 3, maxDelayMs: 5_000 }))
 
 		const { error } = await client.get('/x').safe()
 
@@ -413,7 +424,7 @@ describe('retry budget', () => {
 						: jsonResponse({ ok: true }),
 				)
 			},
-		}).with(retry({ maxDelay: 5_000 }))
+		}).with(retry({ maxDelayMs: 5_000 }))
 
 		const pending = client.get('/x')
 		await vi.advanceTimersByTimeAsync(1000)
@@ -425,7 +436,7 @@ describe('retry budget', () => {
 describe('caller options', () => {
 	it('does not write pipeline state back into the caller object', async () => {
 		const stub = stubFetch(ok)
-		const client = createClient({ fetch: stub.fetch }).with(retry({ baseDelay: 1 }))
+		const client = createClient({ fetch: stub.fetch }).with(retry({ baseDelayMs: 1 }))
 		const meta = { trace: 'abc' }
 
 		await client.get('/x', { meta })
@@ -435,7 +446,7 @@ describe('caller options', () => {
 
 	it('accepts a frozen meta object', async () => {
 		const stub = stubFetch(ok)
-		const client = createClient({ fetch: stub.fetch }).with(retry({ baseDelay: 1 }))
+		const client = createClient({ fetch: stub.fetch }).with(retry({ baseDelayMs: 1 }))
 
 		await expect(client.get('/x', { meta: Object.freeze({ trace: 'abc' }) })).resolves.toEqual({
 			id: 1,
@@ -493,14 +504,18 @@ describe('signing out', () => {
 		const stub = stubFetch(() => jsonResponse({ user: 'A' }))
 		const client = createClient({ fetch: stub.fetch })
 			.with(cache())
-			.with(session({ adapter: { load: async () => ({ name: 'A' }) } }))
+			.with(
+				session({
+					adapter: { load: async () => ({ name: 'A' }), identify: user => user.name },
+				}),
+			)
 
 		await client.get('/me')
-		expect(client.cacheSize()).toBe(1)
+		expect(client.getCacheSize()).toBe(1)
 
 		client.session.clear()
 
-		expect(client.cacheSize()).toBe(0)
+		expect(client.getCacheSize()).toBe(0)
 
 		await client.get('/me')
 		expect(stub.calls).toHaveLength(2)
@@ -512,26 +527,35 @@ describe('signing out', () => {
 			fetch: () => Promise.resolve(jsonResponse({ user: 'A' }, status)),
 		})
 			.with(cache())
-			.with(session({ adapter: { load: async () => ({ name: 'A' }) } }))
+			.with(
+				session({
+					adapter: { load: async () => ({ name: 'A' }), identify: user => user.name },
+				}),
+			)
 
+		await client.session.load()
 		await client.get('/me')
 		status = 401
 		await client.get('/orders').safe()
 
-		expect(client.cacheSize()).toBe(0)
+		expect(client.getCacheSize()).toBe(0)
 	})
 
 	it('keeps the cache across a re-read that lands on the same session', async () => {
 		const stub = stubFetch(ok)
 		const client = createClient({ fetch: stub.fetch })
 			.with(cache())
-			.with(session({ adapter: { load: async () => ({ name: 'A' }) } }))
+			.with(
+				session({
+					adapter: { load: async () => ({ name: 'A' }), identify: user => user.name },
+				}),
+			)
 
 		await client.session.load()
 		await client.get('/me')
 		await client.session.reload()
 
-		expect(client.cacheSize()).toBe(1)
+		expect(client.getCacheSize()).toBe(1)
 	})
 })
 
@@ -545,11 +569,8 @@ describe('session lifecycle', () => {
 						await flush()
 						return { name: 'Ada' }
 					},
+					identify: user => user.name,
 					authorize: (request, current) => {
-						if (current === null) {
-							return request
-						}
-
 						const headers = new Headers(request.headers)
 						headers.set('authorization', `Bearer ${current.name}`)
 
@@ -574,7 +595,10 @@ describe('session lifecycle', () => {
 			.with(dedupe())
 			.with(
 				session({
-					adapter: { load: ctx => ctx.request<{ name: string }>('/auth/session') },
+					adapter: {
+						load: ctx => ctx.request<{ name: string }>('/auth/session'),
+						identify: user => user.name,
+					},
 				}),
 			)
 
@@ -582,7 +606,7 @@ describe('session lifecycle', () => {
 		await client.session.reload()
 
 		expect(stub.calls).toHaveLength(2)
-		expect(client.session.get().session).toEqual({ name: 'v2' })
+		expect(client.session.getState().session).toEqual({ name: 'v2' })
 	})
 
 	it('gives up when a renewed session is still rejected', async () => {
@@ -592,10 +616,16 @@ describe('session lifecycle', () => {
 			fetch: () => Promise.resolve(jsonResponse({}, 401)),
 		}).with(
 			session({
-				adapter: { load: async () => ({ name: 'Ada' }), renew },
+				adapter: {
+					load: async () => ({ name: 'Ada' }),
+					identify: user => user.name,
+					renew,
+				},
 				onUnauthenticated,
 			}),
 		)
+
+		await client.session.load()
 
 		const { error } = await client.get('/x').safe()
 
@@ -621,6 +651,7 @@ describe('session lifecycle', () => {
 			session({
 				adapter: {
 					load: async () => ({ name: 'Ada' }),
+					identify: user => user.name,
 					expiresAt: () => Date.now() + thirtyDays,
 				},
 			}),
@@ -648,7 +679,7 @@ describe('observable state', () => {
 	it('does not turn one participant leaving into an error the others see', async () => {
 		const deferred = deferredFetch()
 		const client = createClient({ fetch: deferred.fetch }).with(observable()).with(dedupe())
-		const key = client.keyFor('/todos')
+		const key = client.getKey('/todos')
 
 		const staying = client.get('/todos')
 		const leaving = client.scope('remote:leaving')
@@ -657,12 +688,18 @@ describe('observable state', () => {
 		leaving.abort()
 		expect((await abandoned).error?.code).toBe('ABORTED')
 
-		expect(client.observe(key).get()).toMatchObject({ status: 'loading', fetching: true })
+		expect(client.observe(key).getState()).toMatchObject({
+			status: 'loading',
+			isFetching: true,
+		})
 
 		deferred.resolve(jsonResponse({ items: [] }))
 		await staying
 
-		expect(client.observe(key).get()).toMatchObject({ status: 'success', fetching: false })
+		expect(client.observe(key).getState()).toMatchObject({
+			status: 'success',
+			isFetching: false,
+		})
 	})
 
 	it('never hands back a store it evicted on the way out', async () => {
@@ -670,13 +707,13 @@ describe('observable state', () => {
 
 		client.observe('GET /pinned').subscribe(() => {})
 
-		const store = client.observe(client.keyFor('/fresh'))
+		const store = client.observe(client.getKey('/fresh'))
 
-		expect(client.observe(client.keyFor('/fresh'))).toBe(store)
+		expect(client.observe(client.getKey('/fresh'))).toBe(store)
 
 		await client.get('/fresh')
 
-		expect(store.get().status).toBe('success')
+		expect(store.getState().status).toBe('success')
 	})
 
 	it('lets a background refresh reach the state a component renders from', async () => {
@@ -685,15 +722,15 @@ describe('observable state', () => {
 			fetch: stubFetch(() => jsonResponse({ version: ++version })).fetch,
 		})
 			.with(observable())
-			.with(cache({ ttl: 0, staleWhileRevalidate: true }))
+			.with(cache({ ttlMs: 0, staleMs: Infinity }))
 
-		const key = client.keyFor('/dashboard')
+		const key = client.getKey('/dashboard')
 
 		await client.get('/dashboard')
 		await client.get('/dashboard')
 		await flush()
 
-		expect(client.observe(key).get()).toMatchObject({
+		expect(client.observe(key).getState()).toMatchObject({
 			data: { version: 2 },
 			from: 'network',
 		})
@@ -713,13 +750,13 @@ describe('invalidation', () => {
 		const todos = client.get('/todos')
 		const users = client.get('/users')
 
-		client.invalidate('GET /todos')
+		client.invalidate(client.getKey('/todos'))
 
-		outstanding.get('/todos')?.(jsonResponse({ items: [] }))
-		outstanding.get('/users')?.(jsonResponse({ items: [] }))
+		outstanding.get('http://localhost:3000/todos')?.(jsonResponse({ items: [] }))
+		outstanding.get('http://localhost:3000/users')?.(jsonResponse({ items: [] }))
 		await Promise.all([todos, users])
 
-		expect(client.cacheSize()).toBe(1)
+		expect(client.getCacheSize()).toBe(1)
 	})
 
 	it('still suppresses the read it was aimed at when a tag is invalidated', async () => {
@@ -732,7 +769,7 @@ describe('invalidation', () => {
 		deferred.resolve(jsonResponse({ items: ['stale'] }))
 		await pending
 
-		expect(client.cacheSize()).toBe(0)
+		expect(client.getCacheSize()).toBe(0)
 	})
 })
 
@@ -771,17 +808,18 @@ describe('queue configuration', () => {
 })
 
 describe('bookkeeping that would otherwise grow forever', () => {
-	it('detaches an aborted scope, not only a disposed one', () => {
+	it('detaches a disposed scope once, and keeps an aborted one attached', () => {
 		const released: string[] = []
 		const scope = createScope({
 			name: 'remote:profile',
-			makeExecutor: () => (() => undefined) as unknown as Executor,
+			createExecutor: () => (() => undefined) as unknown as Executor,
 			onDispose: spent => released.push(spent.name),
 		})
 
 		scope.abort()
-		expect(released).toEqual(['remote:profile'])
+		expect(released).toEqual([])
 
+		scope.dispose()
 		scope.dispose()
 		expect(released).toEqual(['remote:profile'])
 	})
@@ -810,6 +848,7 @@ describe('bookkeeping that would otherwise grow forever', () => {
 				lane: 'default',
 				owner: undefined,
 				tags: [],
+				cacheable: true,
 				parse: 'auto',
 				credentials: undefined,
 				mode: undefined,

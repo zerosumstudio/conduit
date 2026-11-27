@@ -39,7 +39,7 @@ describe('timeout', () => {
 		vi.useFakeTimers()
 
 		const client = createClient({ fetch: hangingFetch().fetch }).with(timeout({ ms: 10_000 }))
-		const pending = client.get('/slow', { meta: { timeout: 50 } }).safe()
+		const pending = client.get('/slow', { meta: { timeoutMs: 50 } }).safe()
 
 		await vi.advanceTimersByTimeAsync(50)
 
@@ -52,11 +52,11 @@ describe('timeout', () => {
 		await expect(client.get('/x')).resolves.toEqual({ ok: true })
 	})
 
-	it('meta.timeout: 0 disables the timeout per request, for an upload that must not be cut off', async () => {
+	it('meta.timeoutMs: 0 disables the timeout per request, for an upload that must not be cut off', async () => {
 		vi.useFakeTimers()
 
 		const client = createClient({ fetch: hangingFetch().fetch }).with(timeout({ ms: 10_000 }))
-		const pending = client.get('/upload', { meta: { timeout: 0 } }).safe()
+		const pending = client.get('/upload', { meta: { timeoutMs: 0 } }).safe()
 
 		await vi.advanceTimersByTimeAsync(100_000)
 

@@ -128,9 +128,9 @@ describe('client events', () => {
 		expect(seen.map(event => event.type)).toEqual(['request:start', 'request:settle'])
 
 		const settle = seen[1] as RequestSettleEvent
-		expect(settle.request.key).toBe('GET /api/users')
+		expect(settle.request.key).toBe('GET http://localhost:3000/api/users')
 		expect(settle.response.status).toBe(200)
-		expect(settle.duration).toBeGreaterThanOrEqual(0)
+		expect(settle.durationMs).toBeGreaterThanOrEqual(0)
 	})
 
 	it('reports a failure instead of a settle', async () => {

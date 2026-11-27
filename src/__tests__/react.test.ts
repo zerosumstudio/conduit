@@ -1,4 +1,5 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createClient } from '../client/core'
@@ -80,7 +81,7 @@ describe('useRequest', () => {
 
 	it('refetches when the key changes, not when the options object does', async () => {
 		const stub = stubFetch(ok)
-		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttl: 0 } })
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 0 } })
 		const { useRequest } = createHooks(api)
 
 		const { rerender } = renderHook(
@@ -139,7 +140,7 @@ describe('useRequest', () => {
 		renderHook(() => useRequest('/me'))
 
 		await waitFor(() => expect(warn).toHaveBeenCalled())
-		expect(warn.mock.calls[0]?.[0]).toMatch(/derived two different keys/)
+		expect(warn.mock.calls[0]?.[0]).toMatch(/derived two keys/)
 	})
 
 	it('stays quiet for a header source that answers the same way twice', async () => {
@@ -160,7 +161,7 @@ describe('useRequest', () => {
 
 	it('refetches on demand', async () => {
 		const stub = stubFetch(ok)
-		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttl: 0 } })
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 0 } })
 		const { useRequest } = createHooks(api)
 
 		const { result } = renderHook(() => useRequest('/me'))
@@ -174,7 +175,7 @@ describe('useRequest', () => {
 		expect(stub.calls).toHaveLength(2)
 	})
 
-	it('reads a cached answer and says it may be stale', async () => {
+	it('reads a fresh cached answer without calling it stale', async () => {
 		const stub = stubFetch(ok)
 		const api = defaults(createClient({ fetch: stub.fetch }))
 		const { useRequest } = createHooks(api)
@@ -186,12 +187,39 @@ describe('useRequest', () => {
 		await waitFor(() => expect(result.current.data).toEqual({ id: 1 }))
 
 		expect(stub.calls).toHaveLength(1)
-		expect(result.current.isStale).toBe(true)
+		expect(result.current.isStale).toBe(false)
+		expect(result.current.updatedAt).toBeGreaterThan(0)
+	})
+
+	it('says isStale only for an answer served past its ttl while a refresh runs', async () => {
+		let version = 1
+		const stub = stubFetch(() => jsonResponse({ version: version++ }))
+		const api = defaults(createClient({ fetch: stub.fetch }), {
+			cache: { ttlMs: 0, staleMs: Infinity },
+		})
+		const { useRequest } = createHooks(api)
+
+		await api.get('/me')
+
+		const seen: boolean[] = []
+
+		const { result } = renderHook(() => {
+			const query = useRequest<{ version: number }>('/me')
+
+			seen.push(query.isStale)
+
+			return query
+		})
+
+		await waitFor(() => expect(result.current.data).toEqual({ version: 2 }))
+
+		expect(seen).toContain(true)
+		expect(result.current.isStale).toBe(false)
 	})
 
 	it('shares one request between two components rendering the same query', async () => {
 		const stub = stubFetch(ok)
-		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttl: 0 } })
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 0 } })
 		const { useRequest } = createHooks(api)
 
 		const first = renderHook(() => useRequest('/me'))
@@ -205,7 +233,7 @@ describe('useRequest', () => {
 
 	it('cancels its own request on unmount without taking a sibling down', async () => {
 		const stub = stubFetch(ok)
-		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttl: 0 } })
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 0 } })
 		const { useRequest } = createHooks(api)
 
 		const leaving = renderHook(() => useRequest('/me'))
@@ -339,9 +367,25 @@ describe('useRequest', () => {
 		expect(stub.calls).toHaveLength(1)
 	})
 
-	it('refetches on focus when opted in', async () => {
+	it('reads again when the tab becomes visible, if opted in', async () => {
 		const stub = stubFetch(ok)
-		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttl: 0 } })
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 0 } })
+		const { useRequest } = createHooks(api)
+
+		renderHook(() => useRequest('/me', { refetchOnFocus: true }))
+		await waitFor(() => expect(stub.calls).toHaveLength(1))
+
+		act(() => {
+			document.dispatchEvent(new Event('visibilitychange'))
+		})
+
+		await waitFor(() => expect(stub.calls).toHaveLength(2))
+	})
+
+	// M5: a tab switch fires focus and visibilitychange, and each used to add a request
+	it('ignores window focus, so one tab switch is one read', async () => {
+		const stub = stubFetch(ok)
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 0 } })
 		const { useRequest } = createHooks(api)
 
 		renderHook(() => useRequest('/me', { refetchOnFocus: true }))
@@ -349,9 +393,58 @@ describe('useRequest', () => {
 
 		act(() => {
 			window.dispatchEvent(new Event('focus'))
+			document.dispatchEvent(new Event('visibilitychange'))
 		})
 
 		await waitFor(() => expect(stub.calls).toHaveLength(2))
+		await new Promise(resolve => setTimeout(resolve, 20))
+		expect(stub.calls).toHaveLength(2)
+	})
+
+	it('serves a fresh entry on a visibility read, and only refetch() bypasses it', async () => {
+		const stub = stubFetch(ok)
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 60_000 } })
+		const { useRequest } = createHooks(api)
+
+		const { result } = renderHook(() => useRequest('/me', { refetchOnFocus: true }))
+		await waitFor(() => expect(result.current.data).toBeDefined())
+
+		act(() => {
+			document.dispatchEvent(new Event('visibilitychange'))
+		})
+		await new Promise(resolve => setTimeout(resolve, 20))
+
+		expect(stub.calls).toHaveLength(1)
+
+		await act(async () => {
+			await result.current.refetch()
+		})
+
+		expect(stub.calls).toHaveLength(2)
+	})
+
+	it('shares one visibility listener between every hook, and removes it with the last', async () => {
+		const add = vi.spyOn(document, 'addEventListener')
+		const remove = vi.spyOn(document, 'removeEventListener')
+		const api = defaults(createClient({ fetch: stubFetch(ok).fetch }))
+		const { useRequest } = createHooks(api)
+
+		const first = renderHook(() => useRequest('/a', { refetchOnFocus: true }))
+		const second = renderHook(() => useRequest('/b', { refetchOnFocus: true }))
+		const third = renderHook(() => useRequest('/c', { refetchOnFocus: true }))
+
+		const added = () => add.mock.calls.filter(([type]) => type === 'visibilitychange').length
+		const removed = () =>
+			remove.mock.calls.filter(([type]) => type === 'visibilitychange').length
+
+		expect(added()).toBe(1)
+
+		first.unmount()
+		second.unmount()
+		expect(removed()).toBe(0)
+
+		third.unmount()
+		expect(removed()).toBe(1)
 	})
 
 	it('does not refetch on reconnect by default', async () => {
@@ -371,7 +464,7 @@ describe('useRequest', () => {
 
 	it('refetches on reconnect when opted in', async () => {
 		const stub = stubFetch(ok)
-		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttl: 0 } })
+		const api = defaults(createClient({ fetch: stub.fetch }), { cache: { ttlMs: 0 } })
 		const { useRequest } = createHooks(api)
 
 		renderHook(() => useRequest('/me', { refetchOnReconnect: true }))
@@ -442,14 +535,16 @@ describe('useMutation', () => {
 		const api = defaults(createClient({ fetch: () => Promise.resolve(jsonResponse({}, 422)) }))
 		const { useMutation } = createHooks(api)
 
-		const { result } = renderHook(() =>
-			useMutation<unknown, void>(() => api.post('/users', {})),
-		)
+		const { result } = renderHook(() => useMutation(() => api.post('/users', {})))
 
 		await act(async () => {
-			await expect(result.current.mutate()).resolves.toBeUndefined()
+			const outcome = await result.current.mutate()
+
+			expect(outcome.data).toBeNull()
+			expect(outcome.error?.status).toBe(422)
 		})
 
+		expect(result.current.status).toBe('error')
 		expect(isConduitError(result.current.error) && result.current.error.status).toBe(422)
 	})
 
@@ -457,9 +552,7 @@ describe('useMutation', () => {
 		const api = defaults(createClient({ fetch: stubFetch(ok).fetch }))
 		const { useMutation } = createHooks(api)
 
-		const { result } = renderHook(() =>
-			useMutation<unknown, void>(() => api.post('/users', {})),
-		)
+		const { result } = renderHook(() => useMutation(() => api.post('/users', {})))
 
 		await act(async () => {
 			await result.current.mutate()
@@ -485,7 +578,7 @@ describe('useMutation', () => {
 		await waitFor(() => expect(query.result.current.data).toEqual({ version: 1 }))
 
 		const mutation = renderHook(() =>
-			useMutation<unknown, void>(() => api.post('/touch', {}), { invalidates: ['me'] }),
+			useMutation(() => api.post('/touch', {}), { invalidates: ['me'] }),
 		)
 
 		await act(async () => {
@@ -509,7 +602,7 @@ describe('useMutation', () => {
 			path: '/me',
 			tags: ['me'],
 		})
-		const touchMe = defineEndpoint<void, unknown>({
+		const touchMe = defineEndpoint({
 			method: 'POST',
 			path: '/touch',
 			invalidates: ['me'],
@@ -527,18 +620,92 @@ describe('useMutation', () => {
 		await waitFor(() => expect(query.result.current.data).toEqual({ version: 2 }))
 	})
 
-	it('keeps a non-conduit error as-is, rather than casting it', async () => {
+	it('wraps a non-conduit error, keeping the original as the cause', async () => {
 		const api = defaults(createClient({ fetch: stubFetch(ok).fetch }))
 		const { useMutation } = createHooks(api)
 		const boom = { reason: 'not a ConduitError' }
 
-		const { result } = renderHook(() => useMutation<unknown, void>(() => Promise.reject(boom)))
+		const { result } = renderHook(() => useMutation(() => Promise.reject(boom)))
 
 		await act(async () => {
 			await result.current.mutate()
 		})
 
-		expect(result.current.error).toBe(boom)
+		expect(isConduitError(result.current.error)).toBe(true)
+		expect(result.current.error?.code).toBe('UNKNOWN')
+		expect(result.current.error?.cause).toBe(boom)
+	})
+
+	// N8: a failure used to resolve undefined, which a success returning undefined also did
+	it('resolves a SafeResult, so a failure cannot pass for a success', async () => {
+		const api = defaults(createClient({ fetch: stubFetch(ok).fetch }))
+		const { useMutation } = createHooks(api)
+
+		const succeeds = renderHook(() => useMutation<undefined>(() => Promise.resolve(undefined)))
+		const fails = renderHook(() =>
+			useMutation<undefined>(() => Promise.reject(new Error('no'))),
+		)
+
+		await act(async () => {
+			expect(await succeeds.result.current.mutate()).toEqual({ data: undefined, error: null })
+			expect((await fails.result.current.mutate()).error?.message).toBe('no')
+		})
+
+		expect(succeeds.result.current.status).toBe('success')
+		expect(fails.result.current.status).toBe('error')
+	})
+
+	it('lets the latest call own the state, whichever settles last', async () => {
+		const api = defaults(createClient({ fetch: stubFetch(ok).fetch }))
+		const { useMutation } = createHooks(api)
+		const gates: Array<(value: string) => void> = []
+
+		const { result } = renderHook(() =>
+			useMutation<string>(
+				() =>
+					new Promise<string>(resolve => {
+						gates.push(resolve)
+					}),
+			),
+		)
+
+		let first: Promise<unknown> = Promise.resolve()
+		let second: Promise<unknown> = Promise.resolve()
+
+		act(() => {
+			first = result.current.mutate()
+			second = result.current.mutate()
+		})
+
+		await act(async () => {
+			gates[1]?.('second')
+			await second
+			gates[0]?.('first')
+			await first
+		})
+
+		expect(result.current.data).toBe('second')
+		expect(result.current.status).toBe('success')
+	})
+
+	it('invalidates its tags before mutate resolves', async () => {
+		const server = createMockServer()
+		server.get('/me', { id: 1 })
+		server.post('/touch', {})
+		const api = defaults(createClient({ fetch: server.fetch }))
+		const { useMutation } = createHooks(api)
+
+		await api.get('/me', { tags: ['me'] })
+
+		const { result } = renderHook(() =>
+			useMutation(() => api.post('/touch', {}), { invalidates: ['me'] }),
+		)
+
+		await act(async () => {
+			await result.current.mutate()
+		})
+
+		expect(api.getCacheSize()).toBe(0)
 	})
 })
 
@@ -568,7 +735,9 @@ describe('usePrefetch', () => {
 describe('useSession', () => {
 	it('follows the shared session', async () => {
 		const api = defaults(createClient({ fetch: stubFetch(ok).fetch }), {
-			session: { adapter: { load: async () => ({ name: 'Ada' }) } },
+			session: {
+				adapter: { load: async () => ({ name: 'Ada' }), identify: user => user.name },
+			},
 		})
 		const { useSession } = createHooks(api)
 
@@ -637,5 +806,135 @@ describe('useRequest first render', () => {
 
 		expect(result.current.isLoading).toBe(true)
 		deferred.resolve(jsonResponse({ id: 1 }))
+	})
+})
+
+// M5: the hooks used to abort their own requests, so StrictMode and focus put duplicates on the wire
+describe('useRequest never aborts what it started', () => {
+	it('sends one request under StrictMode, where the effect runs twice', async () => {
+		const stub = stubFetch(ok)
+		const api = defaults(createClient({ fetch: stub.fetch }))
+		const { useRequest } = createHooks(api)
+
+		const { result } = renderHook(() => useRequest<{ id: number }>('/me'), {
+			wrapper: StrictMode,
+		})
+
+		await waitFor(() => expect(result.current.data).toEqual({ id: 1 }))
+
+		expect(stub.calls).toHaveLength(1)
+		expect(stub.calls[0]?.init.signal?.aborted).toBe(false)
+	})
+
+	it('sends one request for a POST read that dedupe does not cover, under StrictMode', async () => {
+		const stub = stubFetch(ok)
+		const api = defaults(createClient({ fetch: stub.fetch }))
+		const { useRequest } = createHooks(api)
+		const search = defineEndpoint<{ q: string }, { id: number }>({
+			method: 'POST',
+			path: '/search',
+			body: vars => vars,
+			cacheable: false,
+		})
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+		const { result } = renderHook(() => useRequest(search, { q: 'a' }), { wrapper: StrictMode })
+
+		await waitFor(() => expect(result.current.data).toEqual({ id: 1 }))
+
+		expect(stub.calls).toHaveLength(1)
+		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/not cacheable/))
+		warn.mockRestore()
+	})
+
+	it('lets a request finish and fill the cache after its component unmounts', async () => {
+		const deferred = deferredFetch()
+		const api = defaults(createClient({ fetch: deferred.fetch }))
+		const { useRequest } = createHooks(api)
+
+		const { unmount } = renderHook(() => useRequest('/me'))
+
+		await waitFor(() => expect(deferred.calls).toHaveLength(1))
+		unmount()
+
+		expect(deferred.aborted()).toBe(false)
+
+		deferred.resolve(jsonResponse({ id: 1 }))
+		await waitFor(() => expect(api.getCacheSize()).toBe(1))
+	})
+
+	it('shows the new key and ignores the old one landing late, without cancelling it', async () => {
+		const resolvers = new Map<string, (response: Response) => void>()
+		const signals: AbortSignal[] = []
+		const api = defaults(
+			createClient({
+				fetch: (url, init) =>
+					new Promise<Response>(resolve => {
+						resolvers.set(new URL(url).pathname, resolve)
+						signals.push(init.signal as AbortSignal)
+					}),
+			}),
+		)
+		const { useRequest } = createHooks(api)
+
+		const { result, rerender } = renderHook(
+			({ id }) => useRequest<{ id: string }>(`/users/${id}`),
+			{
+				initialProps: { id: 'a' },
+			},
+		)
+
+		await waitFor(() => expect(resolvers.has('/users/a')).toBe(true))
+		rerender({ id: 'b' })
+		await waitFor(() => expect(resolvers.has('/users/b')).toBe(true))
+
+		resolvers.get('/users/b')?.(jsonResponse({ id: 'b' }))
+		await waitFor(() => expect(result.current.data).toEqual({ id: 'b' }))
+
+		resolvers.get('/users/a')?.(jsonResponse({ id: 'a' }))
+		await new Promise(resolve => setTimeout(resolve, 10))
+
+		expect(result.current.data).toEqual({ id: 'b' })
+		expect(signals.every(signal => !signal.aborted)).toBe(true)
+	})
+
+	it('makes one request when several hooks react to the same invalidation', async () => {
+		let version = 1
+		const server = createMockServer()
+
+		server.get('/me', () => ({ version: version++ }))
+
+		const api = defaults(createClient({ fetch: server.fetch }))
+		const { useRequest } = createHooks(api)
+
+		const first = renderHook(() => useRequest<{ version: number }>('/me', { tags: ['me'] }))
+		const second = renderHook(() => useRequest<{ version: number }>('/me', { tags: ['me'] }))
+
+		await waitFor(() => expect(first.result.current.data).toEqual({ version: 1 }))
+		await waitFor(() => expect(second.result.current.data).toEqual({ version: 1 }))
+		expect(server.calls).toHaveLength(1)
+
+		act(() => {
+			api.invalidateTag('me')
+		})
+
+		await waitFor(() => expect(first.result.current.data).toEqual({ version: 2 }))
+		await waitFor(() => expect(second.result.current.data).toEqual({ version: 2 }))
+		expect(server.calls).toHaveLength(2)
+	})
+
+	it('still honours the caller’s own signal', async () => {
+		const controller = new AbortController()
+		const api = defaults(createClient({ fetch: hangingFetch().fetch }))
+		const { useRequest } = createHooks(api)
+
+		const { result } = renderHook(() => useRequest('/me', { signal: controller.signal }))
+
+		await waitFor(() => expect(result.current.isFetching).toBe(true))
+		act(() => {
+			controller.abort()
+		})
+
+		await waitFor(() => expect(result.current.isFetching).toBe(false))
 	})
 })

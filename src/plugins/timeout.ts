@@ -1,21 +1,19 @@
-import { ConduitError } from '../primitives/errors'
+import { createRequestError } from '../http/redact'
 import { withRequest } from '../http/request'
 import { composeSignals } from '../http/signals'
+import { MAX_TIMER_DELAY_MS } from '../primitives/timers'
 import type { Middleware, Plugin } from '../primitives/types'
 
 /*
  *   CONFIG
  ***************************************************************************************************/
+/** A per-request override goes through `meta: { timeoutMs }`, and `0` turns the timeout off. */
 export interface TimeoutConfig {
 	/** Milliseconds before a request is cancelled. Defaults to 15 seconds. */
-	ms?: number
+	ms?: number | undefined
 }
 
-/** Per-request override: `client.get('/slow', { meta: { timeout: 60_000 } })`. */
-export const TIMEOUT_META = 'timeout'
-
-/** The largest delay `setTimeout` can hold without overflowing its 32-bit signed field. */
-const MAX_DELAY = 2_147_483_647
+const DEFAULT_TIMEOUT_MS = 15_000
 
 /*
  *   PLUGIN
@@ -26,11 +24,10 @@ const MAX_DELAY = 2_147_483_647
  * rather than a whole retry sequence.
  */
 export function timeout(config: TimeoutConfig = {}): Plugin {
-	const defaultMs = config.ms ?? 15_000
+	const defaultMs = config.ms ?? DEFAULT_TIMEOUT_MS
 
 	const middleware: Middleware = async (request, next) => {
-		const override = request.meta[TIMEOUT_META]
-		const ms = typeof override === 'number' ? override : defaultMs
+		const ms = request.meta.timeoutMs ?? defaultMs
 
 		if (!Number.isFinite(ms) || ms <= 0) {
 			return next(request)
@@ -38,27 +35,21 @@ export function timeout(config: TimeoutConfig = {}): Plugin {
 
 		const controller = new AbortController()
 
-		const delay = Math.min(ms, MAX_DELAY)
-
-		const timer = setTimeout(() => {
-			controller.abort(
-				new ConduitError({
-					code: 'TIMEOUT',
-					message: `${request.method} ${request.url} exceeded its ${ms}ms timeout.`,
-					method: request.method,
-					url: request.url,
-					owner: request.owner,
-				}),
-			)
-		}, delay)
-
-		const composed = composeSignals([request.signal, controller.signal])
+		const timer = setTimeout(
+			() => {
+				controller.abort(
+					createRequestError(request, 'TIMEOUT', `exceeded its ${ms}ms timeout.`),
+				)
+			},
+			Math.min(ms, MAX_TIMER_DELAY_MS),
+		)
 
 		try {
-			return await next(withRequest(request, { signal: composed.signal }))
+			const signal = composeSignals([request.signal, controller.signal])
+
+			return await next(withRequest(request, { signal }))
 		} finally {
 			clearTimeout(timer)
-			composed.release()
 		}
 	}
 

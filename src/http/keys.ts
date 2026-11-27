@@ -4,7 +4,7 @@ import type { HttpMethod, ParseMode, Vary } from '../primitives/types'
  *   HASH
  ***************************************************************************************************/
 /** FNV-1a, 32-bit. Cheap enough to run on every request, and not cryptographic. */
-export function fnv1a(input: string): string {
+export function hashText(input: string): string {
 	let hash = 0x811c9dc5
 
 	for (let index = 0; index < input.length; index++) {
@@ -18,7 +18,7 @@ export function fnv1a(input: string): string {
 /*
  *   CANONICAL URL
  ***************************************************************************************************/
-function nameOf(pair: string): string {
+function getParamName(pair: string): string {
 	const split = pair.indexOf('=')
 
 	return split === -1 ? pair : pair.slice(0, split)
@@ -29,7 +29,7 @@ function nameOf(pair: string): string {
  * name only and stably, so `?sort=name&sort=age` keeps its order and stays
  * distinct from the reverse.
  */
-export function canonicalUrl(url: string): string {
+export function toCanonicalUrl(url: string): string {
 	const mark = url.indexOf('?')
 
 	if (mark === -1) {
@@ -42,10 +42,10 @@ export function canonicalUrl(url: string): string {
 		.split('&')
 		.filter(pair => pair !== '')
 		.sort((first, second) => {
-			const a = nameOf(first)
-			const b = nameOf(second)
+			const a = getParamName(first)
+			const b = getParamName(second)
 
-			return a < b ? -1 : a > b ? 1 : 0
+			return Number(a > b) - Number(a < b)
 		})
 
 	return pairs.length === 0 ? path : `${path}?${pairs.join('&')}`
@@ -62,17 +62,17 @@ let nextBodyId = 0
  * or `Blob` cannot be read without consuming it, so it gets a per-instance id
  * and never matches anything else.
  */
-export function bodyFingerprint(body: BodyInit | null): string {
+export function fingerprintBody(body: BodyInit | null): string {
 	if (body === null) {
 		return ''
 	}
 
 	if (typeof body === 'string') {
-		return fnv1a(body)
+		return hashText(body)
 	}
 
-	if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
-		return fnv1a(body.toString())
+	if (body instanceof URLSearchParams) {
+		return hashText(body.toString())
 	}
 
 	const existing = bodyIds.get(body)
@@ -90,42 +90,43 @@ export function bodyFingerprint(body: BodyInit | null): string {
 /*
  *   HEADER VARIANCE
  ***************************************************************************************************/
-function collect(init: HeadersInit | undefined, into: Map<string, string>): void {
-	if (init === undefined) {
-		return
+/** A repeated name within one init comma-joins, the way `Headers` does. */
+function joinPairs(pairs: ReadonlyArray<readonly string[]>): Map<string, string> {
+	const joined = new Map<string, string>()
+
+	for (const pair of pairs) {
+		// A malformed pair from plain JS can be short.
+		const [name, value] = pair as [string?, string?]
+
+		if (name === undefined || value === undefined) {
+			continue
+		}
+
+		const lower = name.toLowerCase()
+		const existing = joined.get(lower)
+
+		joined.set(lower, existing === undefined ? value : `${existing}, ${value}`)
 	}
 
-	if (typeof Headers !== 'undefined' && init instanceof Headers) {
-		init.forEach((value, name) => into.set(name, value))
-		return
+	return joined
+}
+
+/** A header init as lowercase `[name, value]` pairs. Plain and array inits are read directly, so a cache hit never builds a `Headers`. */
+function toEntries(init: HeadersInit): Array<readonly [string, string]> {
+	if (init instanceof Headers) {
+		return [...init]
 	}
 
 	if (Array.isArray(init)) {
-		const own = new Map<string, string>()
-
-		for (const pair of init) {
-			const name = pair[0]
-			const value = pair[1]
-
-			if (name === undefined || value === undefined) {
-				continue
-			}
-
-			const lower = name.toLowerCase()
-			const existing = own.get(lower)
-
-			own.set(lower, existing === undefined ? value : `${existing}, ${value}`)
-		}
-
-		for (const [name, value] of own) {
-			into.set(name, value)
-		}
-
-		return
+		return [...joinPairs(init)]
 	}
 
-	for (const [name, value] of Object.entries(init)) {
-		into.set(name.toLowerCase(), value)
+	return Object.entries(init).map(([name, value]) => [name.toLowerCase(), value] as const)
+}
+
+function collect(init: HeadersInit | undefined, into: Map<string, string>): void {
+	for (const [name, value] of init === undefined ? [] : toEntries(init)) {
+		into.set(name, value)
 	}
 }
 
@@ -167,7 +168,7 @@ export function fingerprintHeaders(
 
 	parts.sort()
 
-	return fnv1a(parts.join('\n'))
+	return hashText(parts.join('\n'))
 }
 
 /**
@@ -212,10 +213,10 @@ export interface KeyInputs {
  * serves a caller someone else's data, or the same bytes as the wrong type.
  */
 export function deriveKey(inputs: KeyInputs): string {
-	let key = `${inputs.method} ${canonicalUrl(inputs.url)}`
+	let key = `${inputs.method} ${toCanonicalUrl(inputs.url)}`
 
 	if (inputs.body !== null) {
-		key += ` ${bodyFingerprint(inputs.body)}`
+		key += ` ${fingerprintBody(inputs.body)}`
 	}
 
 	if (inputs.variance !== '') {

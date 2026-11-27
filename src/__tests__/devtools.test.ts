@@ -7,11 +7,11 @@ import { createMockServer, status } from '../testing'
 
 const tick = (): Promise<void> => new Promise(resolve => queueMicrotask(resolve))
 
-let open: Array<{ stop(): void }> = []
+let open: Array<{ detach(): void }> = []
 
 afterEach(() => {
 	for (const devtools of open) {
-		devtools.stop()
+		devtools.detach()
 	}
 
 	open = []
@@ -35,11 +35,16 @@ describe('devtools', () => {
 		await client.get('/me')
 		await tick()
 
-		const entry = devtools.store.get().entries[0]
+		const entry = devtools.store.getState().entries[0]
 
-		expect(entry).toMatchObject({ method: 'GET', url: '/me', state: 'success', status: 200 })
-		expect(entry?.duration).toBeGreaterThanOrEqual(0)
-		expect(devtools.store.get().inFlight).toBe(0)
+		expect(entry).toMatchObject({
+			method: 'GET',
+			url: 'http://localhost:3000/me',
+			state: 'success',
+			status: 200,
+		})
+		expect(entry?.durationMs).toBeGreaterThanOrEqual(0)
+		expect(devtools.store.getState().inFlight).toBe(0)
 	})
 
 	it('records a failure with its code', async () => {
@@ -52,12 +57,12 @@ describe('devtools', () => {
 		await client.get('/gone').safe()
 		await tick()
 
-		expect(devtools.store.get().entries[0]).toMatchObject({
+		expect(devtools.store.getState().entries[0]).toMatchObject({
 			state: 'error',
 			status: 410,
-			code: 'HTTP_ERROR',
+			code: 'HTTP_STATUS',
 		})
-		expect(devtools.store.get().counters.failures).toBe(1)
+		expect(devtools.store.getState().counters.failures).toBe(1)
 	})
 
 	it('strips query strings from urls and keys, which routinely carry tokens', async () => {
@@ -70,11 +75,11 @@ describe('devtools', () => {
 		await client.get('/search', { query: { token: 'super-secret' } })
 		await tick()
 
-		const entry = devtools.store.get().entries[0]
+		const entry = devtools.store.getState().entries[0]
 
-		expect(entry?.url).toBe('/search')
-		expect(entry?.key).toBe('GET /search')
-		expect(JSON.stringify(devtools.store.get())).not.toContain('super-secret')
+		expect(entry?.url).toBe('http://localhost:3000/search')
+		expect(entry?.key).toBe('GET http://localhost:3000/search')
+		expect(JSON.stringify(devtools.store.getState())).not.toContain('super-secret')
 	})
 
 	it('never carries a header value, however a request or its failure is decorated', async () => {
@@ -90,7 +95,7 @@ describe('devtools', () => {
 		await client.get('/me').safe()
 		await tick()
 
-		expect(JSON.stringify(devtools.store.get())).not.toContain('top-secret')
+		expect(JSON.stringify(devtools.store.getState())).not.toContain('top-secret')
 	})
 
 	it('says which remote issued what', async () => {
@@ -104,7 +109,7 @@ describe('devtools', () => {
 		await client.scope('remote:teacher').get('/b')
 		await tick()
 
-		expect(devtools.store.get().entries.map(entry => entry.owner)).toEqual([
+		expect(devtools.store.getState().entries.map(entry => entry.owner)).toEqual([
 			'remote:teacher',
 			'remote:profile',
 		])
@@ -121,7 +126,7 @@ describe('devtools', () => {
 		await client.get('/me')
 		await tick()
 
-		const counters = devtools.store.get().counters
+		const counters = devtools.store.getState().counters
 
 		expect(counters.cacheMisses).toBe(2)
 		expect(counters.dedupeJoins).toBe(1)
@@ -134,15 +139,17 @@ describe('devtools', () => {
 		server.get('/me', { id: 1 })
 
 		const client = defaults(createClient({ fetch: server.fetch }), {
-			session: { adapter: { load: async () => ({ name: 'Ada' }) } },
+			session: {
+				adapter: { load: async () => ({ name: 'Ada' }), identify: user => user.name },
+			},
 		})
 		const devtools = watch(client)
 
 		await client.session.load()
 		await tick()
 
-		expect(devtools.store.get().session).toBe('authenticated')
-		expect(devtools.store.get().sessionTerminal).toBe(false)
+		expect(devtools.store.getState().session).toBe('authenticated')
+		expect(devtools.store.getState().isSessionLost).toBe(false)
 	})
 
 	it('keeps the log bounded', async () => {
@@ -159,7 +166,7 @@ describe('devtools', () => {
 
 		await tick()
 
-		expect(devtools.store.get().entries).toHaveLength(3)
+		expect(devtools.store.getState().entries).toHaveLength(3)
 	})
 
 	it('notifies subscribers', async () => {
@@ -188,13 +195,13 @@ describe('devtools', () => {
 		await client.get('/a')
 		devtools.clear()
 
-		expect(devtools.store.get().entries).toHaveLength(0)
-		expect(devtools.store.get().counters.requests).toBe(0)
+		expect(devtools.store.getState().entries).toHaveLength(0)
+		expect(devtools.store.getState().counters.requests).toBe(0)
 
 		await client.get('/b')
 		await tick()
 
-		expect(devtools.store.get().entries).toHaveLength(1)
+		expect(devtools.store.getState().entries).toHaveLength(1)
 	})
 
 	it('stops watching, and takes the client back to silent', async () => {
@@ -204,12 +211,12 @@ describe('devtools', () => {
 		const client = createClient({ fetch: server.fetch })
 		const devtools = attachDevtools(client, { expose: false })
 
-		devtools.stop()
+		devtools.detach()
 
 		await client.get('/a')
 		await tick()
 
-		expect(devtools.store.get().entries).toHaveLength(0)
+		expect(devtools.store.getState().entries).toHaveLength(0)
 		expect(client.events.active).toBe(false)
 	})
 
@@ -221,7 +228,7 @@ describe('devtools', () => {
 		const devtools = attachDevtools(client)
 		expect(getDevtools()).toBe(devtools)
 
-		devtools.stop()
+		devtools.detach()
 		expect(getDevtools()).toBeUndefined()
 	})
 

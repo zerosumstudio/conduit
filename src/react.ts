@@ -2,27 +2,28 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import type { Client } from './client/core'
 import { resolveEndpointTags, type Endpoint } from './client/endpoint'
-import { composeSignals } from './http/signals'
-import { CACHE_META, type CacheApi } from './plugins/cache'
-import { DEV } from './primitives/dev'
-import type { ConduitError } from './primitives/errors'
-import type { ObservableApi, QueryState, QueryStatus } from './plugins/observable'
+import type { CacheApi } from './plugins/cache'
+import type { ObservableApi } from './plugins/observable'
+import { IDLE_QUERY_STATE, type QueryState, type QueryStatus } from './plugins/query-state'
 import type { SessionApi, SessionState } from './plugins/session'
+import { isCacheable } from './http/method'
+import { IS_DEVELOPMENT } from './primitives/dev'
+import { ConduitError, isErrorCode, toConduitError } from './primitives/errors'
 import type { ReadableStore } from './primitives/stores'
-import type { MethodOptions, ResponseSource } from './primitives/types'
+import type { MethodOptions, ResponseSource, SafeResult } from './primitives/types'
 
 /*
  *   TYPES
  ***************************************************************************************************/
 export interface UseRequestOptions extends MethodOptions {
 	/** Hold off until a dependency is ready. Defaults to true. */
-	enabled?: boolean
+	enabled?: boolean | undefined
 	/** Keep the last successful answer on screen while a new key's first fetch is in flight. Defaults to false. */
-	keepPreviousData?: boolean
-	/** Refetch when the tab regains focus. Defaults to false. */
-	refetchOnFocus?: boolean
-	/** Refetch when the connection comes back. Defaults to false. */
-	refetchOnReconnect?: boolean
+	keepPreviousData?: boolean | undefined
+	/** Read again when the tab becomes visible. A fresh cache entry is served as it is. Defaults to false. */
+	refetchOnFocus?: boolean | undefined
+	/** Read again when the connection comes back. Defaults to false. */
+	refetchOnReconnect?: boolean | undefined
 }
 
 export interface UseRequestResult<T> {
@@ -33,21 +34,28 @@ export interface UseRequestResult<T> {
 	isLoading: boolean
 	/** A request is in the air, with or without data on screen. */
 	isFetching: boolean
-	/** The last answer came from cache. */
+	/** The data on screen was served past its ttl, while a refresh runs behind it. */
 	isStale: boolean
+	/** When the data on screen arrived, in epoch milliseconds. `0` before anything has. */
+	updatedAt: number
+	/** Always asks the network, whatever the cache holds. */
 	refetch(): Promise<void>
 }
 
 export interface UseMutationOptions<V> {
 	/** Tags to invalidate once `mutate` succeeds. Needs the cache plugin. */
-	invalidates?: readonly string[] | ((variables: V) => readonly string[])
+	invalidates?: readonly string[] | ((variables: V) => readonly string[]) | undefined
 }
 
+export type MutationStatus = 'idle' | 'pending' | 'success' | 'error'
+
 export interface UseMutationResult<T, V> {
-	mutate(variables: V): Promise<T | undefined>
+	/** Never rejects. Resolves the same `SafeResult` as `.safe()`, after the tags are invalidated. */
+	mutate(variables: V): Promise<SafeResult<T>>
+	/** The latest call owns the state, whichever one settles last. */
+	status: MutationStatus
 	data: T | undefined
-	/** Whatever `mutate`'s function rejected with. Not assumed to be a `ConduitError`. */
-	error: unknown
+	error: ConduitError | undefined
 	isPending: boolean
 	reset(): void
 }
@@ -55,7 +63,9 @@ export interface UseMutationResult<T, V> {
 export interface Hooks {
 	/**
 	 * Runs a request and renders its state, keyed the way the cache and dedupe
-	 * key it.
+	 * key it. It never cancels what it started: a request that was superseded or
+	 * outlived its component finishes and fills the cache. Cancel with a `scope`
+	 * or your own `signal`.
 	 *
 	 * A client `headers` function that answers differently per call gives every
 	 * render a different key under `vary: '*'`, and this refetches on each one.
@@ -86,19 +96,8 @@ export interface SessionHooks<S> {
 /*
  *   DISABLED SNAPSHOT
  ***************************************************************************************************/
-/** What a disabled or key-less query renders, without a store to read from. */
-const DISABLED_STATE: QueryState<never> = {
-	status: 'idle',
-	data: undefined,
-	error: undefined,
-	from: undefined,
-	fetching: false,
-	updatedAt: 0,
-	invalidatedAt: 0,
-}
-
 const disabledStore: ReadableStore<QueryState<never>> = {
-	get: () => DISABLED_STATE,
+	getState: () => IDLE_QUERY_STATE,
 	subscribe: () => () => {},
 }
 
@@ -107,10 +106,10 @@ const disabledStore: ReadableStore<QueryState<never>> = {
  ***************************************************************************************************/
 /** What either call form normalises into, so one implementation drives both. */
 interface RequestDescriptor {
-	/** `undefined` when disabled, or when deriving it failed — never thrown from render. */
+	/** `undefined` when disabled, or when the key could not be derived yet. */
 	key: string | undefined
-	enabled: boolean
-	run(opts: { signal: AbortSignal; refresh: boolean }): Promise<void>
+	isEnabled: boolean
+	run: (options: { refresh: boolean }) => Promise<void>
 }
 
 interface PreviousSnapshot<T> {
@@ -119,144 +118,118 @@ interface PreviousSnapshot<T> {
 	error: ConduitError | undefined
 	status: QueryStatus
 	from: ResponseSource | undefined
+	updatedAt: number
 }
 
-function useRequestCore<T>(
-	client: ObservableApi,
-	descriptor: RequestDescriptor,
-	config: { keepPreviousData: boolean; refetchOnFocus: boolean; refetchOnReconnect: boolean },
-): UseRequestResult<T> {
-	const { key, enabled, run } = descriptor
-	const { keepPreviousData, refetchOnFocus, refetchOnReconnect } = config
+interface RequestBehaviour {
+	keepPreviousData: boolean
+	refetchOnFocus: boolean
+	refetchOnReconnect: boolean
+}
 
-	const store = useMemo(
-		() => (key === undefined ? undefined : client.observe<T>(key)),
-		[client, key],
-	)
-	const activeStore = (store ?? disabledStore) as ReadableStore<QueryState<T>>
-	const state = useSyncExternalStore(activeStore.subscribe, activeStore.get, activeStore.get)
+interface MutationState {
+	status: MutationStatus
+	data: unknown
+	error: ConduitError | undefined
+}
 
-	const latestRun = useRef(run)
+const IDLE_MUTATION: MutationState = { status: 'idle', data: undefined, error: undefined }
 
-	useEffect(() => {
-		latestRun.current = run
-	})
+/** The hook flags, split from the options that go to the request. */
+function splitOptions(options: UseRequestOptions): {
+	behaviour: RequestBehaviour
+	isEnabled: boolean
+	request: MethodOptions
+} {
+	const {
+		enabled = true,
+		keepPreviousData = false,
+		refetchOnFocus = false,
+		refetchOnReconnect = false,
+		...request
+	} = options
 
-	const inFlight = useRef<AbortController | undefined>(undefined)
+	return {
+		behaviour: { keepPreviousData, refetchOnFocus, refetchOnReconnect },
+		isEnabled: enabled,
+		request,
+	}
+}
 
-	const execute = useCallback(
-		async (refresh: boolean): Promise<void> => {
-			if (key === undefined) {
-				return
-			}
+/**
+ * The query key, or `undefined` while there is not one yet. An `INVALID_ARGUMENT`
+ * is a request that is not ready, such as a missing param, and says nothing.
+ * Anything else is a problem worth a development warning.
+ */
+function tryGetKey(client: Client, isEnabled: boolean, getKey: () => string): string | undefined {
+	if (!isEnabled) {
+		return undefined
+	}
 
-			inFlight.current?.abort()
-
-			const controller = new AbortController()
-			inFlight.current = controller
-
-			await latestRun.current({ signal: controller.signal, refresh })
-		},
-		[key],
-	)
-
-	const refetch = useCallback((): Promise<void> => execute(true), [execute])
-
-	useEffect(() => {
-		if (!enabled) {
-			return
+	try {
+		return getKey()
+	} catch (error) {
+		if (IS_DEVELOPMENT && !isErrorCode(error, 'INVALID_ARGUMENT')) {
+			client.config.logger.warn(
+				`[conduit] useRequest cannot derive a key: ${toConduitError(error).message}`,
+			)
 		}
 
-		void execute(false)
+		return undefined
+	}
+}
 
-		return () => inFlight.current?.abort()
-	}, [execute, enabled, state.invalidatedAt])
+/** Adds `cache: 'refresh'` for an explicit refetch, which skips whatever is stored. */
+function buildRunOptions(
+	request: MethodOptions,
+	key: string,
+	refresh: boolean,
+): MethodOptions & { key: string } {
+	return refresh
+		? { ...request, key, meta: { ...request.meta, cache: 'refresh' } }
+		: { ...request, key }
+}
 
-	useEffect(() => {
-		if (!refetchOnFocus || typeof document === 'undefined') {
-			return
-		}
-
-		const onFocus = (): void => {
-			if (document.visibilityState === 'visible') {
-				void refetch()
-			}
-		}
-
-		document.addEventListener('visibilitychange', onFocus)
-		window.addEventListener('focus', onFocus)
-
-		return () => {
-			document.removeEventListener('visibilitychange', onFocus)
-			window.removeEventListener('focus', onFocus)
-		}
-	}, [refetchOnFocus, refetch])
-
-	useEffect(() => {
-		if (!refetchOnReconnect || typeof window === 'undefined') {
-			return
-		}
-
-		const onOnline = (): void => void refetch()
-
-		window.addEventListener('online', onOnline)
-
-		return () => window.removeEventListener('online', onOnline)
-	}, [refetchOnReconnect, refetch])
-
-	const [previous, setPrevious] = useState<PreviousSnapshot<T> | undefined>(undefined)
-
-	useEffect(() => {
-		if (!keepPreviousData || key === undefined) {
-			return
-		}
-
-		if (state.status === 'success' || state.status === 'error') {
-			setPrevious({
-				key,
-				data: state.data,
-				error: state.error,
-				status: state.status,
-				from: state.from,
-			})
-		}
-	}, [keepPreviousData, key, state.status, state.data, state.error, state.from])
-
-	const showPrevious =
+/** Whether the previous key's data stands in while a new key's first fetch is in flight. */
+function isShowingPrevious<T>(
+	state: QueryState<T>,
+	previous: PreviousSnapshot<T> | undefined,
+	key: string | undefined,
+	keepPreviousData: boolean,
+): previous is PreviousSnapshot<T> {
+	return (
 		keepPreviousData &&
 		previous !== undefined &&
 		key !== undefined &&
 		previous.key !== key &&
 		state.data === undefined &&
 		state.status !== 'success'
+	)
+}
 
-	const view =
-		showPrevious && previous !== undefined
-			? {
-					data: previous.data,
-					error: previous.error,
-					status: previous.status,
-					from: previous.from,
-					fetching: true,
-				}
-			: {
-					data: state.data,
-					error: state.error,
-					status: state.status,
-					from: state.from,
-					fetching: state.fetching,
-				}
+/** What the hook returns: the store's state, or the previous key's while a new one loads. */
+function buildResult<T>(
+	state: QueryState<T>,
+	previous: PreviousSnapshot<T> | undefined,
+	key: string | undefined,
+	isEnabled: boolean,
+	keepPreviousData: boolean,
+	refetch: () => Promise<void>,
+): UseRequestResult<T> {
+	const view = isShowingPrevious(state, previous, key, keepPreviousData)
+		? { ...previous, isFetching: true }
+		: state
+	// Idle with a key and enabled means the first fetch is about to start.
+	const isAboutToFetch = isEnabled && key !== undefined && view.status === 'idle'
 
 	return {
 		data: view.data,
 		error: view.error,
 		status: view.status,
-		// Idle with a key and enabled means the first fetch is about to start.
-		isLoading:
-			view.data === undefined &&
-			(view.fetching || (enabled && key !== undefined && view.status === 'idle')),
-		isFetching: view.fetching,
-		isStale: view.from === 'cache',
+		isLoading: view.data === undefined && (view.isFetching || isAboutToFetch),
+		isFetching: view.isFetching,
+		isStale: view.from === 'stale',
+		updatedAt: view.updatedAt,
 		refetch,
 	}
 }
@@ -281,6 +254,53 @@ function invalidateTags(
 }
 
 /*
+ *   PAGE EVENTS
+ ***************************************************************************************************/
+/**
+ * One listener per page event however many hooks want it, attached when the
+ * first hook subscribes and removed with the last.
+ */
+function createPageEvent(
+	target: () => EventTarget | undefined,
+	type: string,
+	isRelevant: () => boolean,
+): (listener: () => void) => () => void {
+	const listeners = new Set<() => void>()
+
+	const handle = (): void => {
+		if (!isRelevant()) {
+			return
+		}
+
+		for (const listener of [...listeners]) {
+			listener()
+		}
+	}
+
+	return listener => {
+		const source = target()
+
+		if (source === undefined) {
+			return () => {}
+		}
+
+		if (listeners.size === 0) {
+			source.addEventListener(type, handle)
+		}
+
+		listeners.add(listener)
+
+		return () => {
+			listeners.delete(listener)
+
+			if (listeners.size === 0) {
+				source.removeEventListener(type, handle)
+			}
+		}
+	}
+}
+
+/*
  *   FACTORY
  ***************************************************************************************************/
 /**
@@ -296,19 +316,137 @@ export function createHooks<S>(
 ): Hooks & SessionHooks<S>
 export function createHooks(client: Client & ObservableApi): Hooks
 export function createHooks(
-	client: Client & ObservableApi & Partial<SessionApi<unknown>> & Partial<CacheApi>,
+	client: Client & ObservableApi & Partial<SessionApi> & Partial<CacheApi>,
 ): Hooks & Partial<SessionHooks<unknown>> {
+	/**
+	 * Runs the hooks have started and that have not settled, by key and
+	 * invalidation. StrictMode's second effect, and every hook watching a key that
+	 * was just invalidated, join one run instead of each starting a request.
+	 */
+	const runs = new Map<string, Promise<void>>()
+
+	const subscribeVisible = createPageEvent(
+		() => (typeof document === 'undefined' ? undefined : document),
+		'visibilitychange',
+		() => document.visibilityState === 'visible',
+	)
+
+	const subscribeOnline = createPageEvent(
+		() => (typeof window === 'undefined' ? undefined : window),
+		'online',
+		() => true,
+	)
+
+	function useRequestCore<T>(
+		descriptor: RequestDescriptor,
+		behaviour: RequestBehaviour,
+	): UseRequestResult<T> {
+		const { key, isEnabled, run } = descriptor
+		const { keepPreviousData, refetchOnFocus, refetchOnReconnect } = behaviour
+
+		const store = useMemo(() => (key === undefined ? undefined : client.observe<T>(key)), [key])
+		const activeStore = store ?? disabledStore
+		const state = useSyncExternalStore(
+			activeStore.subscribe,
+			activeStore.getState,
+			activeStore.getState,
+		)
+
+		const latestRun = useRef(run)
+		const latestInvalidatedAt = useRef(state.invalidatedAt)
+
+		useEffect(() => {
+			latestRun.current = run
+			latestInvalidatedAt.current = state.invalidatedAt
+		})
+
+		const execute = useCallback(
+			(refresh: boolean): Promise<void> => {
+				if (key === undefined) {
+					return Promise.resolve()
+				}
+
+				const runId = `${key}@${latestInvalidatedAt.current}${refresh ? ':refresh' : ''}`
+				const pending = runs.get(runId)
+
+				if (pending !== undefined) {
+					return pending
+				}
+
+				const started = latestRun.current({ refresh }).finally(() => {
+					runs.delete(runId)
+				})
+
+				runs.set(runId, started)
+
+				return started
+			},
+			[key],
+		)
+
+		const refetch = useCallback((): Promise<void> => execute(true), [execute])
+
+		useEffect(() => {
+			if (isEnabled) {
+				void execute(false)
+			}
+		}, [execute, isEnabled, state.invalidatedAt])
+
+		useEffect(() => {
+			if (!isEnabled || !refetchOnFocus) {
+				return
+			}
+
+			return subscribeVisible(() => {
+				void execute(false)
+			})
+		}, [execute, isEnabled, refetchOnFocus])
+
+		useEffect(() => {
+			if (!isEnabled || !refetchOnReconnect) {
+				return
+			}
+
+			return subscribeOnline(() => {
+				void execute(false)
+			})
+		}, [execute, isEnabled, refetchOnReconnect])
+
+		const [previous, setPrevious] = useState<PreviousSnapshot<T> | undefined>(undefined)
+
+		useEffect(() => {
+			if (!keepPreviousData || key === undefined) {
+				return
+			}
+
+			if (state.status === 'success' || state.status === 'error') {
+				setPrevious({
+					key,
+					data: state.data,
+					error: state.error,
+					status: state.status,
+					from: state.from,
+					updatedAt: state.updatedAt,
+				})
+			}
+		}, [
+			keepPreviousData,
+			key,
+			state.status,
+			state.data,
+			state.error,
+			state.from,
+			state.updatedAt,
+		])
+
+		return buildResult(state, previous, key, isEnabled, keepPreviousData, refetch)
+	}
+
 	/*
-	 * REQUEST — path form
+	 * REQUEST: path form
 	 */
 	function useRequestByPath<T>(path: string, options: UseRequestOptions): UseRequestResult<T> {
-		const {
-			enabled = true,
-			keepPreviousData = false,
-			refetchOnFocus = false,
-			refetchOnReconnect = false,
-			...request
-		} = options
+		const { behaviour, isEnabled, request } = splitOptions(options)
 
 		const latestRequest = useRef(request)
 
@@ -316,140 +454,89 @@ export function createHooks(
 			latestRequest.current = request
 		})
 
-		let key: string | undefined
-
-		try {
-			key = enabled ? client.keyFor(path, request) : undefined
-		} catch {
-			key = undefined
-		}
-
-		const warnedRef = useRef(false)
+		const key = tryGetKey(client, isEnabled, () => client.getKey(path, request))
+		const hasWarned = useRef(false)
 
 		useEffect(() => {
-			if (!DEV || warnedRef.current || key === undefined) {
+			if (!IS_DEVELOPMENT || hasWarned.current || key === undefined) {
 				return
 			}
 
-			warnedRef.current = true
+			hasWarned.current = true
 
-			if (client.keyFor(path, request) !== key) {
-				console.warn(
-					`[conduit] useRequest("${path}") derived two different keys in one render, so the client's headers function answers differently per call — a rotating token, a request id, a trace parent. Under vary: '*' that makes every request unique: nothing hits the cache, nothing shares a flight, and this hook refetches on every render. Narrow vary to the headers that matter (vary: ['authorization']), or keep per-call headers out of the client's headers function.`,
+			if (client.getKey(path, request) !== key) {
+				client.config.logger.warn(
+					`[conduit] useRequest("${path}") derived two keys in one render, so the client's headers function answers differently per call. Narrow vary to the headers that matter.`,
 				)
 			}
-		}, [client, path, request, key])
+		}, [path, request, key])
 
 		const descriptor = useMemo<RequestDescriptor>(
 			() => ({
 				key,
-				enabled: enabled && key !== undefined,
-				run: async ({ signal, refresh }) => {
-					const requestKey = key
-
-					if (requestKey === undefined) {
-						return
-					}
-
-					const combined = composeSignals([latestRequest.current.signal, signal])
-					const meta = refresh
-						? { ...latestRequest.current.meta, [CACHE_META]: 'refresh' }
-						: latestRequest.current.meta
-
-					try {
+				isEnabled: isEnabled && key !== undefined,
+				run: async ({ refresh }) => {
+					if (key !== undefined) {
 						await client
-							.request<T>(path, {
-								...latestRequest.current,
-								key: requestKey,
-								signal: combined.signal,
-								...(meta === undefined ? {} : { meta }),
-							})
+							.request<T>(path, buildRunOptions(latestRequest.current, key, refresh))
 							.safe()
-					} finally {
-						combined.release()
 					}
 				},
 			}),
-			[path, key, enabled],
+			[path, key, isEnabled],
 		)
 
-		return useRequestCore<T>(client, descriptor, {
-			keepPreviousData,
-			refetchOnFocus,
-			refetchOnReconnect,
-		})
+		return useRequestCore<T>(descriptor, behaviour)
 	}
 
 	/*
-	 * REQUEST — endpoint form
+	 * REQUEST: endpoint form
 	 */
 	function useRequestByEndpoint<Vars, Result>(
 		endpoint: Endpoint<Vars, Result>,
 		vars: Vars,
 		options: UseRequestOptions,
 	): UseRequestResult<Result> {
-		const {
-			enabled = true,
-			keepPreviousData = false,
-			refetchOnFocus = false,
-			refetchOnReconnect = false,
-			...overrides
-		} = options
+		const { behaviour, isEnabled, request } = splitOptions(options)
 
 		const latestVars = useRef(vars)
-		const latestOverrides = useRef(overrides)
+		const latestRequest = useRef(request)
 
 		useEffect(() => {
 			latestVars.current = vars
-			latestOverrides.current = overrides
+			latestRequest.current = request
 		})
 
-		let key: string | undefined
+		useEffect(() => {
+			if (IS_DEVELOPMENT && !isCacheable(endpoint.method, endpoint.cacheable)) {
+				client.config.logger.warn(
+					`[conduit] useRequest was given a ${endpoint.method} endpoint for "${endpoint.path}" that is not cacheable, so it sends a request on every mount. Use useMutation, or set cacheable: true.`,
+				)
+			}
+		}, [endpoint])
 
-		try {
-			key = enabled ? client.keyFor(endpoint, vars) : undefined
-		} catch {
-			key = undefined
-		}
+		const key = tryGetKey(client, isEnabled, () => client.getKey(endpoint, vars))
 
 		const descriptor = useMemo<RequestDescriptor>(
 			() => ({
 				key,
-				enabled: enabled && key !== undefined,
-				run: async ({ signal, refresh }) => {
-					const requestKey = key
-
-					if (requestKey === undefined) {
-						return
-					}
-
-					const combined = composeSignals([latestOverrides.current.signal, signal])
-					const meta = refresh
-						? { ...latestOverrides.current.meta, [CACHE_META]: 'refresh' }
-						: latestOverrides.current.meta
-
-					try {
+				isEnabled: isEnabled && key !== undefined,
+				run: async ({ refresh }) => {
+					if (key !== undefined) {
 						await client
-							.call(endpoint, latestVars.current, {
-								...latestOverrides.current,
-								key: requestKey,
-								signal: combined.signal,
-								...(meta === undefined ? {} : { meta }),
-							})
+							.call(
+								endpoint,
+								latestVars.current,
+								buildRunOptions(latestRequest.current, key, refresh),
+							)
 							.safe()
-					} finally {
-						combined.release()
 					}
 				},
 			}),
-			[endpoint, key, enabled],
+			[endpoint, key, isEnabled],
 		)
 
-		return useRequestCore<Result>(client, descriptor, {
-			keepPreviousData,
-			refetchOnFocus,
-			refetchOnReconnect,
-		})
+		return useRequestCore<Result>(descriptor, behaviour)
 	}
 
 	function useRequest<T = unknown>(path: string, options?: UseRequestOptions): UseRequestResult<T>
@@ -459,14 +546,20 @@ export function createHooks(
 		options?: UseRequestOptions,
 	): UseRequestResult<Result>
 	function useRequest(
-		pathOrEndpoint: string | Endpoint<unknown, unknown>,
+		pathOrEndpoint: string | Endpoint<unknown>,
 		varsOrOptions?: unknown,
 		maybeOptions?: UseRequestOptions,
 	): UseRequestResult<unknown> {
+		// The form is fixed at each call site, so the hooks below always run in the same order.
 		if (typeof pathOrEndpoint === 'string') {
-			return useRequestByPath(pathOrEndpoint, (varsOrOptions as UseRequestOptions) ?? {})
+			// eslint-disable-next-line react-hooks/rules-of-hooks
+			return useRequestByPath(
+				pathOrEndpoint,
+				(varsOrOptions as UseRequestOptions | undefined) ?? {},
+			)
 		}
 
+		// eslint-disable-next-line react-hooks/rules-of-hooks
 		return useRequestByEndpoint(pathOrEndpoint, varsOrOptions, maybeOptions ?? {})
 	}
 
@@ -482,18 +575,13 @@ export function createHooks(
 		options?: UseMutationOptions<Vars>,
 	): UseMutationResult<Result, Vars>
 	function useMutation(
-		runOrEndpoint: ((variables: unknown) => PromiseLike<unknown>) | Endpoint<unknown, unknown>,
+		runOrEndpoint: ((variables: unknown) => PromiseLike<unknown>) | Endpoint<unknown>,
 		options?: UseMutationOptions<unknown>,
 	): UseMutationResult<unknown, unknown> {
-		const isEndpoint = typeof runOrEndpoint !== 'function'
+		const [state, setState] = useState<MutationState>(IDLE_MUTATION)
 
-		const [state, setState] = useState<{
-			data: unknown
-			error: unknown
-			isPending: boolean
-		}>({ data: undefined, error: undefined, isPending: false })
-
-		const alive = useRef(true)
+		const isAlive = useRef(true)
+		const latestCall = useRef(0)
 		const latest = useRef(runOrEndpoint)
 		const latestOptions = useRef(options)
 
@@ -503,54 +591,62 @@ export function createHooks(
 		})
 
 		useEffect(() => {
-			alive.current = true
+			isAlive.current = true
 
 			return () => {
-				alive.current = false
+				isAlive.current = false
 			}
 		}, [])
 
-		const mutate = useCallback(
-			async (variables: unknown): Promise<unknown> => {
-				setState(current => ({ ...current, isPending: true, error: undefined }))
+		const mutate = useCallback(async (variables: unknown): Promise<SafeResult<unknown>> => {
+			const call = ++latestCall.current
+			const ownsState = (): boolean => isAlive.current && latestCall.current === call
 
-				try {
-					const current = latest.current
-					const data = isEndpoint
-						? await client.call(current as Endpoint<unknown, unknown>, variables)
-						: await (current as (variables: unknown) => PromiseLike<unknown>)(variables)
+			setState(current => ({ ...current, status: 'pending', error: undefined }))
 
-					if (alive.current) {
-						setState({ data, error: undefined, isPending: false })
-					}
+			try {
+				const current = latest.current
+				const data =
+					typeof current === 'function'
+						? await current(variables)
+						: await client.call(current, variables)
 
-					// An endpoint's own tags and any the caller added both apply.
-					if (isEndpoint) {
-						invalidateTags(
-							client,
-							(current as Endpoint<unknown, unknown>).invalidates,
-							variables,
-						)
-					}
-					invalidateTags(client, latestOptions.current?.invalidates, variables)
-
-					return data
-				} catch (cause) {
-					if (alive.current) {
-						setState({ data: undefined, error: cause, isPending: false })
-					}
-
-					return undefined
+				// An endpoint's own tags and any the caller added both apply.
+				if (typeof current !== 'function') {
+					invalidateTags(client, current.invalidates, variables)
 				}
-			},
-			[isEndpoint],
-		)
 
-		const reset = useCallback(() => {
-			setState({ data: undefined, error: undefined, isPending: false })
+				invalidateTags(client, latestOptions.current?.invalidates, variables)
+
+				if (ownsState()) {
+					setState({ status: 'success', data, error: undefined })
+				}
+
+				return { data, error: null }
+			} catch (cause) {
+				const error = toConduitError(cause)
+
+				if (ownsState()) {
+					setState({ status: 'error', data: undefined, error })
+				}
+
+				return { data: null, error }
+			}
 		}, [])
 
-		return { mutate, data: state.data, error: state.error, isPending: state.isPending, reset }
+		const reset = useCallback(() => {
+			latestCall.current++
+			setState(IDLE_MUTATION)
+		}, [])
+
+		return {
+			mutate,
+			status: state.status,
+			data: state.data,
+			error: state.error,
+			isPending: state.status === 'pending',
+			reset,
+		}
 	}
 
 	/*
@@ -569,12 +665,14 @@ export function createHooks(
 		const handle = client.session
 
 		if (handle === undefined) {
-			throw new Error(
-				'useSession needs the session plugin. Install it with .with(session({ adapter })), or via defaults(client, { session }).',
-			)
+			throw new ConduitError({
+				code: 'INVALID_ARGUMENT',
+				message:
+					'useSession needs the session plugin. Install it with .with(session({ adapter })).',
+			})
 		}
 
-		return useSyncExternalStore(handle.subscribe, handle.get, handle.get)
+		return useSyncExternalStore(handle.subscribe, handle.getState, handle.getState)
 	}
 
 	return { useRequest, useMutation, usePrefetch, useSession }

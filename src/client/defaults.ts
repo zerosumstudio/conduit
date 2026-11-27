@@ -1,6 +1,6 @@
 import type { Client } from './core'
 import { cache, type CacheApi, type CacheConfig } from '../plugins/cache'
-import { dedupe, type DedupeApi, type DedupeConfig } from '../plugins/dedupe'
+import { dedupe, type DedupeApi } from '../plugins/dedupe'
 import { observable, type ObservableApi, type ObservableConfig } from '../plugins/observable'
 import { queue, type QueueApi, type QueueConfig } from '../plugins/queue'
 import { retry, type RetryConfig } from '../plugins/retry'
@@ -11,21 +11,20 @@ import { timeout, type TimeoutConfig } from '../plugins/timeout'
  *   CONFIG
  ***************************************************************************************************/
 export interface DefaultsConfig {
-	observable?: ObservableConfig
-	cache?: CacheConfig
-	dedupe?: DedupeConfig
-	queue?: QueueConfig
+	observable?: ObservableConfig | undefined
+	cache?: CacheConfig | undefined
+	queue?: QueueConfig | undefined
 	/** `false` leaves retry out. */
-	retry?: RetryConfig | false
+	retry?: RetryConfig | false | undefined
 	/** `false` leaves the timeout out. */
-	timeout?: TimeoutConfig | false
+	timeout?: TimeoutConfig | false | undefined
 }
 
 export interface DefaultsWithSession<S> extends DefaultsConfig {
 	session: SessionConfig<S>
 }
 
-export type DefaultStack = Client & ObservableApi & CacheApi & DedupeApi & QueueApi
+export type DefaultClient = Client & ObservableApi & CacheApi & DedupeApi & QueueApi
 
 /*
  *   PRESET
@@ -39,11 +38,12 @@ export type DefaultStack = Client & ObservableApi & CacheApi & DedupeApi & Queue
  *
  * Only `retry` and `timeout` can be left out. The rest add methods to the
  * client, so a preset that sometimes returned them would lie in its own type.
- * Compose `.with()` by hand for a stack this cannot express.
+ * Compose `.with()` by hand for a stack this cannot express. Install
+ * `requestId()` after this, so it sits innermost.
  *
  * ```ts
  * const api = defaults(createClient({ baseUrl: '/api' }), {
- * 	cache: { ttl: 30_000, staleWhileRevalidate: true },
+ * 	cache: { ttlMs: 30_000, staleMs: Infinity },
  * 	session: { adapter: mySessionAdapter },
  * })
  * ```
@@ -51,16 +51,16 @@ export type DefaultStack = Client & ObservableApi & CacheApi & DedupeApi & Queue
 export function defaults<S>(
 	client: Client,
 	config: DefaultsWithSession<S>,
-): DefaultStack & SessionApi<S>
-export function defaults(client: Client, config?: DefaultsConfig): DefaultStack
+): DefaultClient & SessionApi<S>
+export function defaults(client: Client, config?: DefaultsConfig): DefaultClient
 export function defaults(
 	client: Client,
-	config: DefaultsConfig & { session?: SessionConfig<unknown> } = {},
-): DefaultStack {
+	config: DefaultsConfig & { session?: SessionConfig } = {},
+): DefaultClient {
 	let stack: Client = client
 		.with(observable(config.observable))
 		.with(cache(config.cache))
-		.with(dedupe(config.dedupe))
+		.with(dedupe())
 
 	if (config.session !== undefined) {
 		stack = stack.with(session(config.session))
@@ -76,5 +76,5 @@ export function defaults(
 		stack = stack.with(timeout(config.timeout))
 	}
 
-	return stack as DefaultStack
+	return stack as DefaultClient
 }

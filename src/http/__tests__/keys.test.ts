@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-	bodyFingerprint,
-	canonicalUrl,
+	fingerprintBody,
+	toCanonicalUrl,
 	deriveKey,
 	deriveVariance,
 	fingerprintHeaders,
-	fnv1a,
+	hashText,
 } from '../keys'
 import type { HttpMethod } from '../../primitives/types'
 
@@ -17,54 +17,54 @@ const key = (
 	variance = '',
 ): string => deriveKey({ method, url, body, variance })
 
-describe('fnv1a', () => {
+describe('hashText', () => {
 	it('is stable and differs for different input', () => {
-		expect(fnv1a('abc')).toBe(fnv1a('abc'))
-		expect(fnv1a('abc')).not.toBe(fnv1a('abd'))
+		expect(hashText('abc')).toBe(hashText('abc'))
+		expect(hashText('abc')).not.toBe(hashText('abd'))
 	})
 
 	it('handles the empty string', () => {
-		expect(typeof fnv1a('')).toBe('string')
+		expect(typeof hashText('')).toBe('string')
 	})
 })
 
-describe('canonicalUrl', () => {
+describe('toCanonicalUrl', () => {
 	it('sorts query parameters so ordering does not split the cache', () => {
-		expect(canonicalUrl('/x?b=2&a=1')).toBe(canonicalUrl('/x?a=1&b=2'))
-		expect(canonicalUrl('/x?b=2&a=1')).toBe('/x?a=1&b=2')
+		expect(toCanonicalUrl('/x?b=2&a=1')).toBe(toCanonicalUrl('/x?a=1&b=2'))
+		expect(toCanonicalUrl('/x?b=2&a=1')).toBe('/x?a=1&b=2')
 	})
 
 	it('keeps a url without a query untouched', () => {
-		expect(canonicalUrl('/x')).toBe('/x')
+		expect(toCanonicalUrl('/x')).toBe('/x')
 	})
 
 	it('drops a trailing question mark', () => {
-		expect(canonicalUrl('/x?')).toBe('/x')
+		expect(toCanonicalUrl('/x?')).toBe('/x')
 	})
 
 	it('keeps the caller order of a repeated key, which the server may read as meaningful', () => {
-		expect(canonicalUrl('/x?sort=name&sort=age')).toBe('/x?sort=name&sort=age')
-		expect(canonicalUrl('/x?sort=age&sort=name')).toBe('/x?sort=age&sort=name')
+		expect(toCanonicalUrl('/x?sort=name&sort=age')).toBe('/x?sort=name&sort=age')
+		expect(toCanonicalUrl('/x?sort=age&sort=name')).toBe('/x?sort=age&sort=name')
 	})
 
 	it('still sorts a repeated key relative to other keys', () => {
-		expect(canonicalUrl('/x?z=1&tag=b&tag=a')).toBe('/x?tag=b&tag=a&z=1')
+		expect(toCanonicalUrl('/x?z=1&tag=b&tag=a')).toBe('/x?tag=b&tag=a&z=1')
 	})
 })
 
-describe('bodyFingerprint', () => {
+describe('fingerprintBody', () => {
 	it('is empty for no body', () => {
-		expect(bodyFingerprint(null)).toBe('')
+		expect(fingerprintBody(null)).toBe('')
 	})
 
 	it('hashes text-like bodies by value', () => {
-		expect(bodyFingerprint('{"a":1}')).toBe(bodyFingerprint('{"a":1}'))
-		expect(bodyFingerprint('{"a":1}')).not.toBe(bodyFingerprint('{"a":2}'))
+		expect(fingerprintBody('{"a":1}')).toBe(fingerprintBody('{"a":1}'))
+		expect(fingerprintBody('{"a":1}')).not.toBe(fingerprintBody('{"a":2}'))
 	})
 
 	it('hashes URLSearchParams by value', () => {
-		expect(bodyFingerprint(new URLSearchParams('a=1'))).toBe(
-			bodyFingerprint(new URLSearchParams('a=1')),
+		expect(fingerprintBody(new URLSearchParams('a=1'))).toBe(
+			fingerprintBody(new URLSearchParams('a=1')),
 		)
 	})
 
@@ -72,8 +72,8 @@ describe('bodyFingerprint', () => {
 		const first = new FormData()
 		const second = new FormData()
 
-		expect(bodyFingerprint(first)).toBe(bodyFingerprint(first))
-		expect(bodyFingerprint(first)).not.toBe(bodyFingerprint(second))
+		expect(fingerprintBody(first)).toBe(fingerprintBody(first))
+		expect(fingerprintBody(first)).not.toBe(fingerprintBody(second))
 	})
 })
 

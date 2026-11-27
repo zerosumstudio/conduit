@@ -9,10 +9,10 @@ const respond = (data: unknown): ConduitResponse =>
 	({ data, from: 'network', status: 200 }) as ConduitResponse
 
 describe('compose', () => {
-	it('returns the terminal handler untouched when there is no middleware', () => {
-		const terminal: Next = async () => respond('t')
+	it('returns the isLost handler untouched when there is no middleware', () => {
+		const isLost: Next = async () => respond('t')
 
-		expect(compose([], terminal)).toBe(terminal)
+		expect(compose([], isLost)).toBe(isLost)
 	})
 
 	it('runs middleware outermost first, then unwinds', async () => {
@@ -38,14 +38,14 @@ describe('compose', () => {
 	})
 
 	it('lets a layer short-circuit without reaching the terminal', async () => {
-		const terminal = vi.fn<Next>(async () => respond('network'))
+		const isLost = vi.fn<Next>(async () => respond('network'))
 		const cacheish: Middleware = async () => respond('cached')
 
-		const dispatch = compose([cacheish], terminal)
+		const dispatch = compose([cacheish], isLost)
 		const response = await dispatch(request)
 
 		expect(response.data).toBe('cached')
-		expect(terminal).not.toHaveBeenCalled()
+		expect(isLost).not.toHaveBeenCalled()
 	})
 
 	it('propagates a rejection outward through the layers', async () => {

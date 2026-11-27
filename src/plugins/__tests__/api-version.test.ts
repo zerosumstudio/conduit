@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createClient } from '../../client/core'
 import { stubFetch } from '../../__tests__/helpers'
-import { contract, type ContractMismatch } from '../contract'
+import { apiVersion, type ApiVersionMismatch } from '../api-version'
 
 const versioned = (version: string | null): Response =>
 	new Response('{"ok":true}', {
@@ -12,11 +12,11 @@ const versioned = (version: string | null): Response =>
 				: { 'content-type': 'application/json', 'x-api-version': version },
 	})
 
-describe('contract', () => {
+describe('apiVersion', () => {
 	it('says nothing when the versions agree', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v1')).fetch }).with(
-			contract({ expected: 'v1' }),
+			apiVersion({ expected: 'v1' }),
 		)
 
 		await client.get('/x')
@@ -28,7 +28,7 @@ describe('contract', () => {
 	it('says nothing when the server does not report a version', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned(null)).fetch }).with(
-			contract({ expected: 'v1' }),
+			apiVersion({ expected: 'v1' }),
 		)
 
 		await client.get('/x')
@@ -40,19 +40,19 @@ describe('contract', () => {
 	it('reports a skew between bundle and backend', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v2')).fetch }).with(
-			contract({ expected: 'v1' }),
+			apiVersion({ expected: 'v1' }),
 		)
 
 		await client.get('/x')
 
-		expect(String(warn.mock.calls[0]?.[0])).toMatch(/built against API v1.*answered as v2/)
+		expect(String(warn.mock.calls[0]?.[0])).toMatch(/Built against API v1.*answered as v2/)
 		warn.mockRestore()
 	})
 
 	it('reports once per server version, not once per request', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v2')).fetch }).with(
-			contract({ expected: 'v1' }),
+			apiVersion({ expected: 'v1' }),
 		)
 
 		await client.get('/a')
@@ -67,7 +67,7 @@ describe('contract', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		let version = 'v2'
 		const client = createClient({ fetch: stubFetch(() => versioned(version)).fetch }).with(
-			contract({ expected: 'v1' }),
+			apiVersion({ expected: 'v1' }),
 		)
 
 		await client.get('/a')
@@ -80,27 +80,31 @@ describe('contract', () => {
 
 	it('routes the report to a handler instead of the console', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-		const reports: ContractMismatch[] = []
+		const reports: ApiVersionMismatch[] = []
 		const client = createClient({
 			baseUrl: '/api',
 			fetch: stubFetch(() => versioned('v2')).fetch,
-		}).with(contract({ expected: 1, onMismatch: report => reports.push(report) }))
+		}).with(apiVersion({ expected: 1, onMismatch: report => reports.push(report) }))
 
 		await client.get('/x')
 
 		expect(warn).not.toHaveBeenCalled()
-		expect(reports[0]).toEqual({ expected: '1', actual: 'v2', url: '/api/x' })
+		expect(reports[0]).toEqual({
+			expected: '1',
+			actual: 'v2',
+			url: 'http://localhost:3000/api/x',
+		})
 		warn.mockRestore()
 	})
 
 	it('reports on the event stream too', async () => {
 		vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const client = createClient({ fetch: stubFetch(() => versioned('v2')).fetch }).with(
-			contract({ expected: 'v1' }),
+			apiVersion({ expected: 'v1' }),
 		)
 		const seen: Array<{ expected: string; actual: string }> = []
 
-		client.events.on('contract:mismatch', event =>
+		client.events.on('api-version:mismatch', event =>
 			seen.push({ expected: event.expected, actual: event.actual }),
 		)
 
@@ -119,11 +123,41 @@ describe('contract', () => {
 						headers: { 'content-type': 'application/json', 'api-revision': '9' },
 					}),
 			).fetch,
-		}).with(contract({ expected: '8', header: 'api-revision' }))
+		}).with(apiVersion({ expected: '8', header: 'api-revision' }))
 
 		await client.get('/x')
 
 		expect(warn).toHaveBeenCalledOnce()
 		warn.mockRestore()
+	})
+
+	// L10: an error response carries the version too, and an empty expectation is refused
+	it('reads the version off an error response', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const client = createClient({
+			fetch: stubFetch(
+				() => new Response('{}', { status: 503, headers: { 'x-api-version': 'v2' } }),
+			).fetch,
+		}).with(apiVersion({ expected: 'v1' }))
+
+		await client.get('/x').safe()
+
+		expect(String(warn.mock.calls[0]?.[0])).toMatch(/answered as v2/)
+		warn.mockRestore()
+	})
+
+	it('refuses an empty expected version at install', () => {
+		expect(() => apiVersion({ expected: '' })).toThrow(/needs a version/)
+	})
+
+	it('keeps the query out of what it reports', async () => {
+		const reports: ApiVersionMismatch[] = []
+		const client = createClient({ fetch: stubFetch(() => versioned('v2')).fetch }).with(
+			apiVersion({ expected: 'v1', onMismatch: report => reports.push(report) }),
+		)
+
+		await client.get('/x', { query: { token: 'secret' } })
+
+		expect(reports[0]?.url).toBe('http://localhost:3000/x')
 	})
 })
