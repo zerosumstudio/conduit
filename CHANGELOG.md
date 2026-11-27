@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.1 - Unreleased
+
+The last release of `@bkincz/conduit`. Only the README changes: it now points to `@zerosumstudio/conduit`, where the library continues.
+
 ## 2.0.0
 
 The session and cache release. Credentials stay on the API origin, a user

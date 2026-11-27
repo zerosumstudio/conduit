@@ -1,5 +1,7 @@
 # Conduit
 
+> **This package has moved to [`@zerosumstudio/conduit`](https://www.npmjs.com/package/@zerosumstudio/conduit).** `@bkincz/conduit` is no longer maintained and won't get updates or fixes. To upgrade, follow the [migration guide](https://github.com/zerosumstudio/conduit/blob/main/docs/migration-1.0.md).
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A data-fetching client for micro frontends. One client is shared by every bundle on the page, so four remotes asking for the same thing make one request, read one cache, and share one session. Sharing goes through a global registry rather than any framework's provider, so it works the same whichever framework each bundle is built with, and whether they match or not.
