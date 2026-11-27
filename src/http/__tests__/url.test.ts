@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { ConduitError } from '../../primitives/errors'
-import { appendQuery, applyPathParams, buildUrl, isAbsoluteUrl, joinUrl, stripQuery } from '../url'
+
+import { appendQuery, applyPathParams } from '../url'
 
 describe('applyPathParams', () => {
 	it('substitutes and encodes placeholders', () => {
@@ -16,20 +17,30 @@ describe('applyPathParams', () => {
 
 	it('fails loudly when a value is missing rather than requesting a literal placeholder', () => {
 		expect(() => applyPathParams('/users/:id', {})).toThrow(ConduitError)
-		expect(() => applyPathParams('/users/:id', {})).toThrow(/needs a value for ":id"/)
+		expect(() => applyPathParams('/users/:id', {})).toThrow(/needs params: \{ id/)
+	})
+
+	it('rejects a dot segment, which would climb out of the path', () => {
+		expect(() => applyPathParams('/files/:name', { name: '..' })).toThrow(/dot segment/)
+		expect(() => applyPathParams('/files/:name', { name: '.' })).toThrow(/dot segment/)
+	})
+
+	it('encodes a value that only looks like a dot segment', () => {
+		expect(applyPathParams('/files/:name', { name: '%2e%2e' })).toBe('/files/%252e%252e')
+		expect(applyPathParams('/files/:name', { name: '../x' })).toBe('/files/..%2Fx')
 	})
 
 	it('rejects an empty value rather than collapsing the segment', () => {
-		expect(() => applyPathParams('/users/:id', { id: '' })).toThrow(/empty value for ":id"/)
+		expect(() => applyPathParams('/users/:id', { id: '' })).toThrow(/empty ":id"/)
 	})
 
 	it('rejects a whitespace-only value the same way', () => {
-		expect(() => applyPathParams('/users/:id', { id: '   ' })).toThrow(/empty value for ":id"/)
+		expect(() => applyPathParams('/users/:id', { id: '   ' })).toThrow(/empty ":id"/)
 	})
 
 	it('does not resolve a name through Object.prototype instead of failing', () => {
 		expect(() => applyPathParams('/users/:constructor', {})).toThrow(
-			/needs a value for ":constructor"/,
+			/needs params: \{ constructor/,
 		)
 	})
 
@@ -80,96 +91,5 @@ describe('appendQuery', () => {
 
 	it('extends an existing query and keeps the fragment last', () => {
 		expect(appendQuery('/x?page=1#section', { size: 20 })).toBe('/x?page=1&size=20#section')
-	})
-})
-
-describe('stripQuery', () => {
-	it('drops the query string', () => {
-		expect(stripQuery('/x?token=secret')).toBe('/x')
-	})
-
-	it('leaves a url with no query alone', () => {
-		expect(stripQuery('/x')).toBe('/x')
-	})
-})
-
-describe('joinUrl', () => {
-	it('joins with exactly one slash', () => {
-		expect(joinUrl('/api', 'users')).toBe('/api/users')
-		expect(joinUrl('/api/', '/users')).toBe('/api/users')
-		expect(joinUrl('', '/users')).toBe('/users')
-	})
-
-	it('lets an absolute url on the page origin ignore the base', () => {
-		expect(joinUrl('/api', 'http://localhost:3000/x')).toBe('http://localhost:3000/x')
-	})
-
-	it('lets an absolute url on the base url origin ignore the base', () => {
-		expect(joinUrl('https://api.test/v1', 'https://api.test/x')).toBe('https://api.test/x')
-	})
-
-	it('rejects an absolute url on a foreign origin', () => {
-		expect(() => joinUrl('/api', 'https://other.test/x')).toThrow(ConduitError)
-		expect(() => joinUrl('/api', 'https://other.test/x')).toThrow(/leaves the origins/)
-	})
-
-	it('allows a foreign origin once it is on the allowlist', () => {
-		expect(joinUrl('/api', 'https://other.test/x', ['https://other.test'])).toBe(
-			'https://other.test/x',
-		)
-	})
-
-	it('rejects an absolute url whose origin cannot even be parsed', () => {
-		expect(() => joinUrl('/api', 'http://[invalid')).toThrow(ConduitError)
-		expect(() => joinUrl('/api', 'http://[invalid')).toThrow(/leaves the origins/)
-	})
-
-	it('always rejects a protocol-relative url, allowlist or not', () => {
-		expect(() => joinUrl('/api', '//other.test/x')).toThrow(ConduitError)
-		expect(() => joinUrl('/api', '//other.test/x')).toThrow(/protocol-relative/)
-		expect(() => joinUrl('/api', '//other.test/x', ['https://other.test'])).toThrow(
-			/protocol-relative/,
-		)
-	})
-
-	it('strips the query from the rejection message but keeps it on the error url', () => {
-		try {
-			joinUrl('/api', 'https://other.test/x?token=secret')
-			expect.unreachable('expected a rejection')
-		} catch (error) {
-			expect(error).toBeInstanceOf(ConduitError)
-			const conduitError = error as ConduitError
-			expect(conduitError.message).not.toContain('token=secret')
-			expect(conduitError.url).toBe('https://other.test/x?token=secret')
-		}
-	})
-})
-
-describe('isAbsoluteUrl', () => {
-	it('recognises schemes and protocol-relative urls', () => {
-		expect(isAbsoluteUrl('https://x.test')).toBe(true)
-		expect(isAbsoluteUrl('//x.test')).toBe(true)
-		expect(isAbsoluteUrl('/x')).toBe(false)
-		expect(isAbsoluteUrl('x')).toBe(false)
-	})
-})
-
-describe('buildUrl', () => {
-	it('applies params, joins and appends query in order', () => {
-		expect(buildUrl('/api', '/users/:id', { id: 3 }, { expand: 'posts' })).toBe(
-			'/api/users/3?expand=posts',
-		)
-	})
-
-	it('rejects a foreign origin before the query is even considered', () => {
-		expect(() => buildUrl('/api', 'https://other.test/x', undefined, { a: 1 })).toThrow(
-			ConduitError,
-		)
-	})
-
-	it('honours the allowlist passed through from the client', () => {
-		expect(
-			buildUrl('/api', 'https://other.test/x', undefined, undefined, ['https://other.test']),
-		).toBe('https://other.test/x')
 	})
 })

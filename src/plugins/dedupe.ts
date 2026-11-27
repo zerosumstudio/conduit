@@ -1,3 +1,4 @@
+import { formatKey } from '../http/redact'
 import { toAbortError } from '../http/abort'
 import type { EventBus } from '../primitives/events'
 import { protect } from '../primitives/freeze'
@@ -5,24 +6,12 @@ import { withRequest } from '../http/request'
 import type { ConduitRequest, ConduitResponse, Middleware, Plugin } from '../primitives/types'
 
 /*
- *   CONFIG
+ *   API
  ***************************************************************************************************/
-export interface DedupeConfig {
-	/** Which requests may share a flight. Defaults to `GET` and `HEAD`. */
-	shouldDedupe?: (request: ConduitRequest) => boolean
-}
-
 export interface DedupeApi {
 	/** Distinct requests currently in flight and shareable. */
-	inFlight(): number
+	getInFlightCount(): number
 }
-
-const SHAREABLE: ReadonlySet<string> = new Set(['GET', 'HEAD'])
-
-const byMethod = (request: ConduitRequest): boolean => SHAREABLE.has(request.method)
-
-/** Skips flight sharing entirely: `client.get('/x', { meta: { dedupe: 'bypass' } })`. */
-export const DEDUPE_META = 'dedupe'
 
 /*
  *   FLIGHT
@@ -38,37 +27,37 @@ interface Flight {
  *   PLUGIN
  ***************************************************************************************************/
 /**
- * One request per key, however many callers ask for it.
+ * One request per key, however many callers ask for it. It shares a flight for
+ * every request that is `cacheable`.
  *
  * Cancellation is reference-counted. The flight runs on its own controller and
  * aborts when the last participant leaves, so one remote unmounting cancels its
  * own wait and nobody else's.
  */
-export function dedupe(config: DedupeConfig = {}): Plugin<DedupeApi> {
-	const shouldDedupe = config.shouldDedupe ?? byMethod
+export function dedupe(): Plugin<DedupeApi> {
 	const flights = new Map<string, Flight>()
 	let events: EventBus | undefined
 
 	const join = async (
 		flight: Flight,
 		request: ConduitRequest,
-		joined: boolean,
+		isJoined: boolean,
 	): Promise<ConduitResponse> => {
 		flight.participants++
 
-		let left = false
+		let hasLeft = false
 		let rejectOnAbort: (error: unknown) => void = () => {}
 
-		const leave = (aborted: boolean): void => {
-			if (left) {
+		const leave = (isAborted: boolean): void => {
+			if (hasLeft) {
 				return
 			}
 
-			left = true
+			hasLeft = true
 			request.signal.removeEventListener('abort', onAbort)
 			flight.participants--
 
-			if (aborted && flight.participants === 0) {
+			if (isAborted && flight.participants === 0) {
 				if (flights.get(request.key) === flight) {
 					flights.delete(request.key)
 				}
@@ -94,14 +83,14 @@ export function dedupe(config: DedupeConfig = {}): Plugin<DedupeApi> {
 
 			protect(response.data)
 
-			return joined ? { ...response, from: 'dedupe', request } : response
+			return isJoined ? { ...response, from: 'dedupe', request } : response
 		} finally {
 			leave(false)
 		}
 	}
 
 	const middleware: Middleware = async (request, next) => {
-		if (request.meta[DEDUPE_META] === 'bypass' || !shouldDedupe(request)) {
+		if (request.meta.dedupe === 'bypass' || !request.cacheable) {
 			return next(request)
 		}
 
@@ -115,7 +104,7 @@ export function dedupe(config: DedupeConfig = {}): Plugin<DedupeApi> {
 			if (events?.active === true) {
 				events.emit('dedupe:join', {
 					type: 'dedupe:join',
-					key: request.key,
+					key: formatKey(request),
 					owner: request.owner,
 					at: Date.now(),
 				})
@@ -156,7 +145,7 @@ export function dedupe(config: DedupeConfig = {}): Plugin<DedupeApi> {
 				flights.clear()
 			})
 
-			return { inFlight: () => flights.size }
+			return { getInFlightCount: () => flights.size }
 		},
 		onDestroy: () => {
 			release?.()

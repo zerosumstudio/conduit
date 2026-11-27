@@ -16,11 +16,11 @@ const UNENCODABLE: ReadonlySet<string> = new Set(['function', 'symbol', 'bigint'
 
 function isBodyInit(value: unknown): value is BodyInit {
 	return (
-		(typeof Blob !== 'undefined' && value instanceof Blob) ||
-		(typeof FormData !== 'undefined' && value instanceof FormData) ||
-		(typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams) ||
-		(typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer) ||
-		(typeof ReadableStream !== 'undefined' && value instanceof ReadableStream) ||
+		value instanceof Blob ||
+		value instanceof FormData ||
+		value instanceof URLSearchParams ||
+		value instanceof ArrayBuffer ||
+		value instanceof ReadableStream ||
 		ArrayBuffer.isView(value)
 	)
 }
@@ -41,8 +41,8 @@ export function encodeBody(value: unknown): EncodedBody {
 
 	if (UNENCODABLE.has(typeof value)) {
 		throw new ConduitError({
-			code: 'CONFIG',
-			message: `A ${typeof value} cannot be a request body. Pass a plain value, or something the platform already accepts.`,
+			code: 'INVALID_ARGUMENT',
+			message: `A ${typeof value} cannot be a request body. Pass a plain value or a BodyInit.`,
 		})
 	}
 
@@ -50,9 +50,8 @@ export function encodeBody(value: unknown): EncodedBody {
 		return { body: JSON.stringify(value), contentType: 'application/json' }
 	} catch (cause) {
 		throw new ConduitError({
-			code: 'CONFIG',
-			message:
-				'The request body could not be JSON-encoded. A circular reference cannot round-trip through JSON.',
+			code: 'INVALID_ARGUMENT',
+			message: 'The request body is not JSON-encodable. Remove the circular reference.',
 			cause,
 		})
 	}

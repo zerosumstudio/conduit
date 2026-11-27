@@ -45,8 +45,8 @@ describe('queue', () => {
 		await settle()
 
 		expect(gated.calls).toHaveLength(2)
-		expect(client.queueDepth()).toBe(1)
-		expect(client.activeRequests()).toBe(2)
+		expect(client.getQueueDepth()).toBe(1)
+		expect(client.getActiveCount()).toBe(2)
 
 		gated.releaseAll()
 		await settle()
@@ -69,8 +69,8 @@ describe('queue', () => {
 
 		await Promise.all(pending)
 
-		expect(client.activeRequests()).toBe(0)
-		expect(client.queueDepth()).toBe(0)
+		expect(client.getActiveCount()).toBe(0)
+		expect(client.getQueueDepth()).toBe(0)
 	})
 
 	it('lets the host boot path overtake a remote prefetching', async () => {
@@ -85,12 +85,12 @@ describe('queue', () => {
 		]
 
 		await settle()
-		expect(gated.calls.map(call => call.url)).toEqual(['/occupier'])
+		expect(gated.calls.map(call => new URL(call.url).pathname)).toEqual(['/occupier'])
 
 		gated.release(0)
 		await settle()
 
-		expect(gated.calls.map(call => call.url)).toEqual(['/occupier', '/boot'])
+		expect(gated.calls.map(call => new URL(call.url).pathname)).toEqual(['/occupier', '/boot'])
 
 		for (let round = 0; round < 4; round++) {
 			gated.releaseAll()
@@ -113,7 +113,7 @@ describe('queue', () => {
 
 		await Promise.all(pending)
 
-		expect(gated.calls.map(call => call.url)).toEqual(['/1', '/2', '/3'])
+		expect(gated.calls.map(call => new URL(call.url).pathname)).toEqual(['/1', '/2', '/3'])
 	})
 
 	it('sorts an unconfigured lane last rather than refusing it', async () => {
@@ -129,7 +129,10 @@ describe('queue', () => {
 		gated.release(0)
 		await settle()
 
-		expect(gated.calls.map(call => call.url)).toEqual(['/occupier', '/normal'])
+		expect(gated.calls.map(call => new URL(call.url).pathname)).toEqual([
+			'/occupier',
+			'/normal',
+		])
 
 		for (let round = 0; round < 4; round++) {
 			gated.releaseAll()
@@ -154,8 +157,8 @@ describe('queue', () => {
 
 		await settle()
 
-		expect(gated.calls.map(call => call.url)).toEqual(['/p1', '/normal'])
-		expect(client.queueDepth('prefetch')).toBe(2)
+		expect(gated.calls.map(call => new URL(call.url).pathname)).toEqual(['/p1', '/normal'])
+		expect(client.getQueueDepth('prefetch')).toBe(2)
 
 		for (let round = 0; round < 5; round++) {
 			gated.releaseAll()
@@ -174,17 +177,17 @@ describe('queue', () => {
 		const queued = scope.get('/queued').safe()
 
 		await settle()
-		expect(client.queueDepth()).toBe(1)
+		expect(client.getQueueDepth()).toBe(1)
 
 		scope.abort()
 
 		expect((await queued).error?.code).toBe('ABORTED')
-		expect(client.queueDepth()).toBe(0)
+		expect(client.getQueueDepth()).toBe(0)
 
 		gated.releaseAll()
 		await occupier
 
-		expect(gated.calls.map(call => call.url)).toEqual(['/occupier'])
+		expect(gated.calls.map(call => new URL(call.url).pathname)).toEqual(['/occupier'])
 	})
 
 	it('refuses a request that was cancelled before it arrived', async () => {
@@ -198,7 +201,7 @@ describe('queue', () => {
 
 		expect(error?.code).toBe('ABORTED')
 		expect(stub.calls).toHaveLength(0)
-		expect(client.activeRequests()).toBe(0)
+		expect(client.getActiveCount()).toBe(0)
 	})
 
 	it('releases the slot when a request fails', async () => {
@@ -209,7 +212,7 @@ describe('queue', () => {
 		await client.get('/a').safe()
 		await client.get('/b').safe()
 
-		expect(client.activeRequests()).toBe(0)
+		expect(client.getActiveCount()).toBe(0)
 	})
 
 	it('lets a request skip the queue entirely', async () => {
@@ -223,7 +226,10 @@ describe('queue', () => {
 
 		await settle()
 
-		expect(gated.calls.map(call => call.url)).toEqual(['/occupier', '/urgent'])
+		expect(gated.calls.map(call => new URL(call.url).pathname)).toEqual([
+			'/occupier',
+			'/urgent',
+		])
 
 		gated.releaseAll()
 		await Promise.all(pending)

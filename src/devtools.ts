@@ -1,11 +1,11 @@
 import type { Client } from './client/core'
-import { stripQuery } from './http/url'
-import { DEV } from './primitives/dev'
+import { stripQuery } from './http/redact'
+import { IS_DEVELOPMENT } from './primitives/dev'
 import type { ConduitErrorCode } from './primitives/errors'
-import type { ConduitEvent, Unsubscribe } from './primitives/events'
+import type { ConduitEvent } from './primitives/events'
 import type { SessionStatus } from './plugins/session'
 import { createStore, type ReadableStore } from './primitives/stores'
-import type { ConduitRequest, ResponseSource } from './primitives/types'
+import type { ConduitRequest, HttpMethod, Lane, ResponseSource } from './primitives/types'
 
 /*
  *   STATE
@@ -13,16 +13,18 @@ import type { ConduitRequest, ResponseSource } from './primitives/types'
 export interface DevtoolsEntry {
 	readonly id: number
 	readonly key: string
-	readonly method: string
+	readonly method: HttpMethod
 	readonly url: string
 	/** Which app or remote issued it. */
 	readonly owner: string | undefined
-	readonly lane: string
+	readonly lane: Lane
 	readonly state: 'pending' | 'success' | 'error'
 	readonly from: ResponseSource | undefined
 	readonly status: number | undefined
 	readonly code: ConduitErrorCode | undefined
-	readonly duration: number | undefined
+	/** The id the `requestId` plugin sent, when it is installed. */
+	readonly requestId: string | undefined
+	readonly durationMs: number | undefined
 	readonly startedAt: number
 }
 
@@ -44,17 +46,17 @@ export interface DevtoolsState {
 	readonly counters: DevtoolsCounters
 	readonly session: SessionStatus | undefined
 	/** Set once the session is gone and cannot be recovered. */
-	readonly sessionTerminal: boolean
+	readonly isSessionLost: boolean
 }
 
 export interface DevtoolsConfig {
 	/** How many finished requests to keep. Defaults to 100. */
-	max?: number
+	max?: number | undefined
 	/**
 	 * Hang the handle on `globalThis.__CONDUIT_DEVTOOLS__` for console access.
-	 * Defaults to `DEV`, so a production build never exposes it unasked.
+	 * Defaults to `IS_DEVELOPMENT`, so a production build never exposes it unasked.
 	 */
-	expose?: boolean
+	expose?: boolean | undefined
 }
 
 export interface Devtools {
@@ -62,7 +64,7 @@ export interface Devtools {
 	/** Drops the log and zeroes the counters. In-flight requests keep reporting. */
 	clear(): void
 	/** Unsubscribes from the client and removes the global handle. */
-	stop(): void
+	detach(): void
 }
 
 const EMPTY_COUNTERS: DevtoolsCounters = {
@@ -76,6 +78,8 @@ const EMPTY_COUNTERS: DevtoolsCounters = {
 	queued: 0,
 }
 
+const DEFAULT_MAX_ENTRIES = 100
+
 const GLOBAL_KEY = '__CONDUIT_DEVTOOLS__'
 
 type DevtoolsScope = typeof globalThis & { [GLOBAL_KEY]?: Devtools }
@@ -88,13 +92,13 @@ type DevtoolsScope = typeof globalThis & { [GLOBAL_KEY]?: Devtools }
  * client shows traffic from every remote on the page, attributed by owner.
  */
 export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Devtools {
-	const max = config.max ?? 100
+	const max = config.max ?? DEFAULT_MAX_ENTRIES
 	const store = createStore<DevtoolsState>({
 		entries: [],
 		inFlight: 0,
 		counters: EMPTY_COUNTERS,
 		session: undefined,
-		sessionTerminal: false,
+		isSessionLost: false,
 	})
 
 	const pending = new Map<ConduitRequest, number>()
@@ -150,7 +154,8 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 							from: undefined,
 							status: undefined,
 							code: undefined,
-							duration: undefined,
+							requestId: undefined,
+							durationMs: undefined,
 							startedAt: event.at,
 						},
 						...current.entries.slice(0, max - 1),
@@ -164,7 +169,8 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 					state: 'success',
 					from: event.response.from,
 					status: event.response.status,
-					duration: event.duration,
+					requestId: event.request.meta.requestId,
+					durationMs: event.durationMs,
 				})
 				break
 
@@ -173,7 +179,8 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 					state: 'error',
 					status: event.error.status,
 					code: event.error.code,
-					duration: event.duration,
+					requestId: event.error.requestId ?? event.request.meta.requestId,
+					durationMs: event.durationMs,
 				})
 				bump('failures')
 				break
@@ -206,7 +213,7 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 				store.update(current => ({
 					...current,
 					session: event.status,
-					sessionTerminal: event.terminal,
+					isSessionLost: event.isLost,
 				}))
 				break
 
@@ -222,19 +229,19 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 			store.update(current => ({ ...current, entries: [], counters: EMPTY_COUNTERS }))
 		},
 
-		stop: () => {
+		detach: () => {
 			unsubscribe()
 			pending.clear()
 
 			const scope = globalThis as DevtoolsScope
 
 			if (scope[GLOBAL_KEY] === devtools) {
-				delete scope[GLOBAL_KEY]
+				Reflect.deleteProperty(scope, GLOBAL_KEY)
 			}
 		},
 	}
 
-	if (config.expose ?? DEV) {
+	if (config.expose ?? IS_DEVELOPMENT) {
 		;(globalThis as DevtoolsScope)[GLOBAL_KEY] = devtools
 	}
 
@@ -245,8 +252,3 @@ export function attachDevtools(client: Client, config: DevtoolsConfig = {}): Dev
 export function getDevtools(): Devtools | undefined {
 	return (globalThis as DevtoolsScope)[GLOBAL_KEY]
 }
-
-/*
- *   UNSUBSCRIBE
- ***************************************************************************************************/
-export type { Unsubscribe }

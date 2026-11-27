@@ -10,14 +10,6 @@ export interface UploadProgressEvent {
 	readonly percent: number | undefined
 }
 
-export interface XhrFetchOptions {
-	/** Fires as the request body is sent, which `fetch` has no way to report. */
-	onProgress?: (event: UploadProgressEvent) => void
-}
-
-/*
- *   HEADERS
- ***************************************************************************************************/
 function toProgressEvent(
 	loaded: number,
 	total: number,
@@ -29,6 +21,12 @@ function toProgressEvent(
 		percent: lengthComputable && total > 0 ? Math.round((loaded / total) * 100) : undefined,
 	}
 }
+
+/*
+ *   RESPONSE
+ ***************************************************************************************************/
+/** Statuses a `Response` refuses to be built with a body for. */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([101, 204, 205, 304])
 
 function parseRawHeaders(raw: string): Headers {
 	const headers = new Headers()
@@ -53,7 +51,8 @@ function parseRawHeaders(raw: string): Headers {
 /*
  *   FETCH
  ***************************************************************************************************/
-export function createXhrFetch(options: XhrFetchOptions = {}): FetchLike {
+/** A `fetch` that reports upload progress, which `fetch` itself has no way to do. */
+export function createXhrFetch(onProgress: (event: UploadProgressEvent) => void): FetchLike {
 	return (input, init) =>
 		new Promise<Response>((resolve, reject) => {
 			const signal = init.signal
@@ -61,8 +60,9 @@ export function createXhrFetch(options: XhrFetchOptions = {}): FetchLike {
 			// Aborting an XHR that was never sent fires no event at all, so an
 			// already-cancelled signal has to reject directly rather than wait
 			// for one.
-			if (signal !== undefined && signal !== null && signal.aborted) {
+			if (signal?.aborted === true) {
 				reject(new DOMException('The operation was aborted.', 'AbortError'))
+
 				return
 			}
 
@@ -81,22 +81,29 @@ export function createXhrFetch(options: XhrFetchOptions = {}): FetchLike {
 				})
 			}
 
-			if (options.onProgress !== undefined) {
-				const onProgress = options.onProgress
-
-				xhr.upload.addEventListener('progress', event => {
-					onProgress(toProgressEvent(event.loaded, event.total, event.lengthComputable))
-				})
-			}
+			xhr.upload.addEventListener('progress', event => {
+				onProgress(toProgressEvent(event.loaded, event.total, event.lengthComputable))
+			})
 
 			xhr.addEventListener('load', () => {
-				resolve(
-					new Response(xhr.response as Blob, {
-						status: xhr.status,
-						statusText: xhr.statusText,
-						headers: parseRawHeaders(xhr.getAllResponseHeaders()),
-					}),
-				)
+				try {
+					resolve(
+						new Response(
+							NULL_BODY_STATUSES.has(xhr.status) ? null : (xhr.response as Blob),
+							{
+								status: xhr.status,
+								statusText: xhr.statusText,
+								headers: parseRawHeaders(xhr.getAllResponseHeaders()),
+							},
+						),
+					)
+				} catch (cause) {
+					reject(
+						cause instanceof Error
+							? cause
+							: new TypeError('Failed to read the response'),
+					)
+				}
 			})
 
 			xhr.addEventListener('error', () => {

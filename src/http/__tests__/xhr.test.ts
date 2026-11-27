@@ -83,7 +83,7 @@ afterEach(() => {
 
 describe('createXhrFetch', () => {
 	it('opens with the method and url, then sends the body', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const form = new FormData()
 
 		const pending = fetch('/upload', { method: 'POST', headers: {}, body: form })
@@ -97,7 +97,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('defaults to GET when no method is given', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {} })
 
 		FakeXhr.instances[0]?.respond(200, new Blob())
@@ -107,7 +107,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('sets every header from init.headers', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: { 'x-tenant': 'acme' } })
 
 		expect(FakeXhr.instances[0]?.requestHeaders['x-tenant']).toBe('acme')
@@ -117,7 +117,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('turns credentials: include into withCredentials', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {}, credentials: 'include' })
 
 		expect(FakeXhr.instances[0]?.withCredentials).toBe(true)
@@ -127,7 +127,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('leaves withCredentials alone for any other credentials mode', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {}, credentials: 'omit' })
 
 		expect(FakeXhr.instances[0]?.withCredentials).toBe(false)
@@ -137,7 +137,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('resolves with a Response carrying the status and parsed headers', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {} })
 
 		FakeXhr.instances[0]?.respond(
@@ -154,7 +154,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('ignores a malformed header line with no colon', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {} })
 
 		FakeXhr.instances[0]?.respond(
@@ -170,7 +170,7 @@ describe('createXhrFetch', () => {
 
 	it('reports upload progress as it happens', async () => {
 		const onProgress = vi.fn<(event: UploadProgressEvent) => void>()
-		const fetch = createXhrFetch({ onProgress })
+		const fetch = createXhrFetch(onProgress)
 		const pending = fetch('/x', { headers: {} })
 
 		FakeXhr.instances[0]?.progress(50, 200)
@@ -182,7 +182,7 @@ describe('createXhrFetch', () => {
 
 	it('reports total and percent as undefined when the length is not computable', async () => {
 		const onProgress = vi.fn<(event: UploadProgressEvent) => void>()
-		const fetch = createXhrFetch({ onProgress })
+		const fetch = createXhrFetch(onProgress)
 		const pending = fetch('/x', { headers: {} })
 
 		FakeXhr.instances[0]?.progress(50, 0, false)
@@ -197,7 +197,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('rejects on a network error', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {} })
 
 		FakeXhr.instances[0]?.fail()
@@ -206,7 +206,7 @@ describe('createXhrFetch', () => {
 	})
 
 	it('rejects with a named TimeoutError on timeout', async () => {
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {} })
 
 		FakeXhr.instances[0]?.timeoutOut()
@@ -216,7 +216,7 @@ describe('createXhrFetch', () => {
 
 	it('aborts the underlying xhr when the signal aborts, and rejects', async () => {
 		const controller = new AbortController()
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {}, signal: controller.signal })
 
 		controller.abort()
@@ -229,7 +229,7 @@ describe('createXhrFetch', () => {
 		const controller = new AbortController()
 		controller.abort()
 
-		const fetch = createXhrFetch()
+		const fetch = createXhrFetch(() => {})
 		const pending = fetch('/x', { headers: {}, signal: controller.signal })
 
 		await expect(pending).rejects.toMatchObject({ name: 'AbortError' })

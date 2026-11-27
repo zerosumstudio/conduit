@@ -1,47 +1,27 @@
-import { toConduitError, type ConduitError } from '../primitives/errors'
+import { toConduitError } from '../primitives/errors'
 import type { Unsubscribe } from '../primitives/events'
 import { createStore, type ReadableStore, type WritableStore } from '../primitives/stores'
-import type { ConduitRequest, Middleware, Plugin, ResponseSource } from '../primitives/types'
+import type { ConduitRequest, Middleware, Plugin } from '../primitives/types'
+import { IDLE_QUERY_STATE, type QueryState, type QueryStatus } from './query-state'
 
 /*
  *   STATE
  ***************************************************************************************************/
-export type QueryStatus = 'idle' | 'loading' | 'success' | 'error'
-
-export interface QueryState<T> {
-	readonly status: QueryStatus
-	readonly data: T | undefined
-	readonly error: ConduitError | undefined
-	/** Where the last answer came from. `cache` means it may be stale. */
-	readonly from: ResponseSource | undefined
-	/** A request for this key is in the air, whether or not there is already data. */
-	readonly fetching: boolean
-	readonly updatedAt: number
-	/** Bumped whenever a cache invalidation or identity reset targets this key. */
-	readonly invalidatedAt: number
-}
+export type { QueryState, QueryStatus }
 
 export interface ObservableConfig {
 	/** How many keys to keep state for. Defaults to 200. A watched key is never evicted. */
-	max?: number
+	max?: number | undefined
 }
 
 export interface ObservableApi {
 	/** The live state of one key, created on first call and shared by every watcher. */
 	observe<T = unknown>(key: string): ReadableStore<QueryState<T>>
 	/** How many keys currently have state. */
-	observedKeys(): number
+	getObservedCount(): number
 }
 
-const IDLE: QueryState<never> = {
-	status: 'idle',
-	data: undefined,
-	error: undefined,
-	from: undefined,
-	fetching: false,
-	updatedAt: 0,
-	invalidatedAt: 0,
-}
+const DEFAULT_MAX_ENTRIES = 200
 
 /*
  *   PLUGIN
@@ -51,11 +31,13 @@ const IDLE: QueryState<never> = {
  * lives on the client, so two remotes rendering the same query watch one store.
  */
 export function observable(config: ObservableConfig = {}): Plugin<ObservableApi> {
-	const max = config.max ?? 200
+	const max = config.max ?? DEFAULT_MAX_ENTRIES
 	const stores = new Map<string, WritableStore<QueryState<unknown>>>()
 	/** Tags seen on requests for a key, so a `cache:invalidate` tag target can be matched here too. */
 	const tagsByKey = new Map<string, Set<string>>()
 	let generation = 0
+	/** Counts identity resets, so a read that started before one never writes after it. */
+	let epoch = 0
 
 	const pending = new Map<string, number>()
 
@@ -132,7 +114,7 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 		}, 0)
 	}
 
-	const storeFor = (key: string): WritableStore<QueryState<unknown>> => {
+	const getStore = (key: string): WritableStore<QueryState<unknown>> => {
 		const existing = stores.get(key)
 
 		if (existing !== undefined) {
@@ -142,7 +124,7 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 			return existing
 		}
 
-		const created = createStore<QueryState<unknown>>(IDLE)
+		const created = createStore<QueryState<unknown>>(IDLE_QUERY_STATE)
 		stores.set(key, created)
 
 		if (stores.size > max) {
@@ -171,6 +153,24 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 		}
 	}
 
+	const applySet = (key: string, data: unknown, at: number): void => {
+		const store = stores.get(key)
+
+		if (store === undefined) {
+			return
+		}
+
+		store.set({
+			status: 'success',
+			data,
+			error: undefined,
+			from: 'cache',
+			isFetching: false,
+			updatedAt: at,
+			invalidatedAt: store.getState().invalidatedAt,
+		})
+	}
+
 	const bumpTag = (tag: string): void => {
 		for (const [key, tags] of tagsByKey) {
 			if (tags.has(tag)) {
@@ -180,7 +180,8 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 	}
 
 	const middleware: Middleware = async (request, next) => {
-		const store = storeFor(request.key)
+		const store = getStore(request.key)
+		const startedAtEpoch = epoch
 
 		trackTags(request)
 		enter(request.key)
@@ -188,21 +189,26 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 		store.update(current => ({
 			...current,
 			status: current.data === undefined ? 'loading' : current.status,
-			fetching: true,
+			isFetching: true,
 		}))
 
 		try {
 			const response = await next(request)
 			const others = leave(request.key)
 
+			// Whoever was signed in when this started is not who is signed in now.
+			if (epoch !== startedAtEpoch) {
+				return response
+			}
+
 			store.set({
 				status: 'success',
 				data: response.data,
 				error: undefined,
 				from: response.from,
-				fetching: others > 0,
+				isFetching: others > 0,
 				updatedAt: Date.now(),
-				invalidatedAt: store.get().invalidatedAt,
+				invalidatedAt: store.getState().invalidatedAt,
 			})
 
 			return response
@@ -210,12 +216,16 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 			const error = toConduitError(cause)
 			const others = leave(request.key)
 
+			if (epoch !== startedAtEpoch) {
+				throw error
+			}
+
 			if (error.code === 'ABORTED') {
 				if (others === 0) {
 					store.update(current => ({
 						...current,
 						status: current.data === undefined ? 'idle' : current.status,
-						fetching: false,
+						isFetching: false,
 					}))
 				}
 
@@ -226,7 +236,7 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 				...current,
 				status: 'error',
 				error,
-				fetching: others > 0,
+				isFetching: others > 0,
 				updatedAt: Date.now(),
 			}))
 
@@ -235,60 +245,42 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 	}
 
 	let releaseReset: (() => void) | undefined
-	let releaseInvalidate: (() => void) | undefined
-	let releaseSet: (() => void) | undefined
+	let releaseChange: (() => void) | undefined
 
 	return {
 		name: 'observable',
 		middleware,
 		onInit: ctx => {
 			releaseReset = ctx.onResetIdentity(() => {
+				epoch++
 				generation++
 
 				for (const store of stores.values()) {
-					store.set({ ...IDLE, invalidatedAt: generation })
+					store.set({ ...IDLE_QUERY_STATE, invalidatedAt: generation })
 				}
 
 				tagsByKey.clear()
 			})
 
-			releaseInvalidate = ctx.events.on('cache:invalidate', event => {
-				if (event.target === '*') {
+			releaseChange = ctx.onCacheChange(change => {
+				if (change.type === 'set') {
+					applySet(change.key, change.data, change.at)
+
+					return
+				}
+
+				if (change.target === '*') {
 					bumpAll()
-
-					return
+				} else if (change.target.startsWith('tag:')) {
+					bumpTag(change.target.slice(4))
+				} else {
+					bumpOne(change.target)
 				}
-
-				if (event.target.startsWith('tag:')) {
-					bumpTag(event.target.slice(4))
-
-					return
-				}
-
-				bumpOne(event.target)
-			})
-
-			releaseSet = ctx.events.on('cache:set', event => {
-				const store = stores.get(event.key)
-
-				if (store === undefined) {
-					return
-				}
-
-				store.set({
-					status: 'success',
-					data: event.data,
-					error: undefined,
-					from: 'cache',
-					fetching: false,
-					updatedAt: event.at,
-					invalidatedAt: store.get().invalidatedAt,
-				})
 			})
 
 			return {
 				observe: <T>(key: string): ReadableStore<QueryState<T>> => {
-					const store = storeFor(key)
+					const store = getStore(key)
 					const existing = wrappers.get(key)
 
 					if (existing !== undefined) {
@@ -296,17 +288,17 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 					}
 
 					const wrapped: ReadableStore<QueryState<unknown>> = {
-						get: () => store.get(),
+						getState: () => store.getState(),
 						subscribe: listener => {
 							const off = store.subscribe(listener)
-							let released = false
+							let isReleased = false
 
 							const unsubscribe: Unsubscribe = () => {
-								if (released) {
+								if (isReleased) {
 									return
 								}
 
-								released = true
+								isReleased = true
 								off()
 								requestSweep()
 							}
@@ -319,16 +311,14 @@ export function observable(config: ObservableConfig = {}): Plugin<ObservableApi>
 
 					return wrapped as unknown as ReadableStore<QueryState<T>>
 				},
-				observedKeys: (): number => stores.size,
+				getObservedCount: (): number => stores.size,
 			}
 		},
 		onDestroy: () => {
 			releaseReset?.()
 			releaseReset = undefined
-			releaseInvalidate?.()
-			releaseInvalidate = undefined
-			releaseSet?.()
-			releaseSet = undefined
+			releaseChange?.()
+			releaseChange = undefined
 			wrappers.clear()
 			clearTimeout(sweepTimer)
 			sweepTimer = undefined

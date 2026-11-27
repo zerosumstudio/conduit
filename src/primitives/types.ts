@@ -1,10 +1,13 @@
 import type { ConduitError } from './errors'
 import type { EventBus, Unsubscribe } from './events'
+import type { ConduitLogger } from './logger'
+import type { RedactRules } from '../http/redact'
 
 /*
  *   UTILITY
  ***************************************************************************************************/
-export type EmptyExtension = Record<never, never>
+// eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type -- a plugin with no API extends the client by nothing
+export type NoExtension = Record<never, never>
 
 /** A union that still autocompletes, where `T | string` would collapse to `string`. */
 export type LiteralUnion<T extends string> = T | (string & Record<never, never>)
@@ -13,15 +16,6 @@ export type LiteralUnion<T extends string> = T | (string & Record<never, never>)
  *   HTTP
  ***************************************************************************************************/
 export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS'
-
-/** Methods conduit may replay after a failure. `POST` and `PATCH` are absent deliberately. */
-export const IDEMPOTENT_METHODS: ReadonlySet<HttpMethod> = new Set<HttpMethod>([
-	'GET',
-	'HEAD',
-	'PUT',
-	'DELETE',
-	'OPTIONS',
-])
 
 /*
  *   SCHEDULING
@@ -34,7 +28,8 @@ export type Lane = LiteralUnion<'critical' | 'default' | 'prefetch'>
  ***************************************************************************************************/
 /**
  * Which headers take part in a request's identity. `'*'` is every header, `[]`
- * is none.
+ * is none. Headers a session attaches never take part, since an identity change
+ * already clears everything held for the previous one.
  *
  * A header that is unique per request, such as a trace id, gives every request
  * its own key under `'*'`, so nothing hits the cache or shares a flight.
@@ -55,6 +50,116 @@ export type PathParams = Readonly<Record<string, string | number>>
 export type ParseMode = 'auto' | 'json' | 'text' | 'blob' | 'arrayBuffer' | 'formData' | 'none'
 
 /*
+ *   PATH PARAMS, FROM THE PATH LITERAL
+ ***************************************************************************************************/
+type Letter =
+	| 'a'
+	| 'b'
+	| 'c'
+	| 'd'
+	| 'e'
+	| 'f'
+	| 'g'
+	| 'h'
+	| 'i'
+	| 'j'
+	| 'k'
+	| 'l'
+	| 'm'
+	| 'n'
+	| 'o'
+	| 'p'
+	| 'q'
+	| 'r'
+	| 's'
+	| 't'
+	| 'u'
+	| 'v'
+	| 'w'
+	| 'x'
+	| 'y'
+	| 'z'
+	| 'A'
+	| 'B'
+	| 'C'
+	| 'D'
+	| 'E'
+	| 'F'
+	| 'G'
+	| 'H'
+	| 'I'
+	| 'J'
+	| 'K'
+	| 'L'
+	| 'M'
+	| 'N'
+	| 'O'
+	| 'P'
+	| 'Q'
+	| 'R'
+	| 'S'
+	| 'T'
+	| 'U'
+	| 'V'
+	| 'W'
+	| 'X'
+	| 'Y'
+	| 'Z'
+	| '_'
+
+type Digit = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9'
+
+type TakeName<S extends string, Name extends string = ''> = S extends `${infer C}${infer Rest}`
+	? C extends Letter | Digit
+		? TakeName<Rest, `${Name}${C}`>
+		: Name
+	: Name
+
+/** A name starts with a letter or an underscore, as the runtime pattern requires. */
+type ValidName<Name extends string> = Name extends ''
+	? never
+	: Name extends `${Digit}${string}`
+		? never
+		: Name
+
+type SegmentParam<Segment extends string> = Segment extends `::${string}`
+	? never
+	: Segment extends `:${infer Rest}`
+		? ValidName<TakeName<Rest>>
+		: never
+
+/**
+ * The `:name` placeholders in a path literal. `::name` is a literal colon, and
+ * a colon in the middle of a segment is not a placeholder.
+ */
+export type PathParamNames<P extends string> = P extends `${infer Head}?${string}`
+	? PathParamNames<Head>
+	: P extends `${infer Segment}/${infer Rest}`
+		? SegmentParam<Segment> | PathParamNames<Rest>
+		: SegmentParam<P>
+
+/** `params` for a path literal: `PathParamsOf<'/users/:id'>` is `{ id: string | number }`. */
+export type PathParamsOf<P extends string> = string extends P
+	? PathParams
+	: { readonly [K in PathParamNames<P>]: string | number }
+
+/**
+ * The trailing arguments of a verb. A literal path with placeholders makes the
+ * options, and `params` inside them, required. Anything else keeps them optional.
+ *
+ * TypeScript cannot infer the path when the result type is given explicitly, as
+ * in `get<User>('/users/:id')`, so `params` stays loose there.
+ */
+export type OptionsArgs<
+	P extends string,
+	O extends { params?: PathParams | undefined },
+> = string extends P
+	? [options?: O]
+	: [PathParamNames<P>] extends [never]
+		? [options?: Omit<O, 'params'> & { params?: undefined }]
+		: [options: Omit<O, 'params'> & { params: PathParamsOf<P> }]
+
+/*
  *   META
  ***************************************************************************************************/
 /**
@@ -70,6 +175,24 @@ export type ParseMode = 'auto' | 'json' | 'text' | 'blob' | 'arrayBuffer' | 'for
  * ```
  */
 export interface ConduitMeta {
+	/** `bypass` skips the cache. `refresh` skips a stored entry and replaces it. */
+	cache?: 'bypass' | 'refresh' | undefined
+	/** `bypass` skips flight sharing. */
+	dedupe?: 'bypass' | undefined
+	/** `bypass` skips the queue. */
+	queue?: 'bypass' | undefined
+	/** `bypass` skips authorize, and 401 handling. Use it for sign-in calls. */
+	session?: 'bypass' | undefined
+	/** Overrides the timeout plugin's default for one request. `0` turns it off. */
+	timeoutMs?: number | undefined
+	/** Which attempt this is. Written by the retry plugin. */
+	attempt?: number | undefined
+	/** Set by the `requestId` plugin: the id this attempt went out with. */
+	requestId?: string | undefined
+	/** Header names the session attached, which the transport treats as credentials. */
+	credentialHeaders?: readonly string[] | undefined
+	/** Sends this one request through another fetch. `/upload` uses it for XHR progress. */
+	fetch?: FetchLike | undefined
 	[key: string]: unknown
 }
 
@@ -80,32 +203,40 @@ export interface ConduitMeta {
  * from the body, not something a caller sets.
  */
 export interface RequestInitPassthrough {
-	mode?: RequestMode
-	redirect?: RequestRedirect
-	cache?: RequestCache
-	keepalive?: boolean
-	priority?: RequestPriority
-	referrerPolicy?: ReferrerPolicy
-	integrity?: string
+	mode?: RequestMode | undefined
+	/**
+	 * Conduit sends a request that carries a credential the platform will not
+	 * strip itself (an `x-api-key`, a session header) with `manual`, and fails it
+	 * with `REDIRECT_BLOCKED` when the answer is a redirect. Set this to opt out.
+	 */
+	redirect?: RequestRedirect | undefined
+	cache?: RequestCache | undefined
+	keepalive?: boolean | undefined
+	priority?: RequestPriority | undefined
+	referrerPolicy?: ReferrerPolicy | undefined
+	integrity?: string | undefined
 }
 
 export interface RequestOptions extends RequestInitPassthrough {
-	method?: HttpMethod
-	/** Fills `:name` placeholders. A missing one is a config error, not a 404. */
-	params?: PathParams
-	query?: Query
+	method?: HttpMethod | undefined
+	/** Fills `:name` placeholders. A missing one is an `INVALID_ARGUMENT`, not a 404. */
+	params?: PathParams | undefined
+	query?: Query | undefined
 	/** JSON-encoded with a matching content type unless it is already a `BodyInit`. */
 	body?: unknown
-	headers?: HeadersInit
-	signal?: AbortSignal
+	headers?: HeadersInit | undefined
+	signal?: AbortSignal | undefined
 	/** Overrides the derived cache and dedupe key. */
-	key?: string
-	lane?: Lane
-	owner?: string
-	tags?: readonly string[]
-	parse?: ParseMode
-	credentials?: RequestCredentials
-	meta?: ConduitMeta
+	key?: string | undefined
+	lane?: Lane | undefined
+	owner?: string | undefined
+	/** Labels for `invalidateTag`. They never switch caching on, `cacheable` does. */
+	tags?: readonly string[] | undefined
+	/** Whether this request reads, so cache and dedupe may serve it. Defaults to `GET` and `HEAD`. */
+	cacheable?: boolean | undefined
+	parse?: ParseMode | undefined
+	credentials?: RequestCredentials | undefined
+	meta?: ConduitMeta | undefined
 }
 
 /** `RequestOptions` minus the parts a method helper already decides for you. */
@@ -116,6 +247,7 @@ export type MethodOptions = Omit<RequestOptions, 'method' | 'body'>
  ***************************************************************************************************/
 /** The resolved request every middleware sees. */
 export interface ConduitRequest {
+	/** Always absolute: it is what the transport sends. */
 	readonly url: string
 	readonly method: HttpMethod
 	readonly headers: Headers
@@ -127,6 +259,8 @@ export interface ConduitRequest {
 	readonly lane: Lane
 	readonly owner: string | undefined
 	readonly tags: readonly string[]
+	/** Whether cache and dedupe may serve this request. */
+	readonly cacheable: boolean
 	readonly parse: ParseMode
 	readonly credentials: RequestCredentials | undefined
 	readonly mode: RequestMode | undefined
@@ -138,6 +272,8 @@ export interface ConduitRequest {
 	readonly integrity: string | undefined
 	/** Mutable by design: plugins stash state here across the onion. */
 	readonly meta: ConduitMeta
+	/** Hides this client's secret query values in a url, for messages and logs. */
+	readonly redactUrl: (url: string) => string
 }
 
 /**
@@ -158,6 +294,7 @@ export type RequestPatch = Partial<
 		| 'lane'
 		| 'owner'
 		| 'tags'
+		| 'cacheable'
 		| 'parse'
 		| 'meta'
 	>
@@ -168,13 +305,17 @@ export type RequestPatch = Partial<
 /*
  *   RESPONSE
  ***************************************************************************************************/
-export type ResponseSource = 'network' | 'cache' | 'dedupe' | 'mock'
+/**
+ * Where an answer came from. `stale` is a stored entry served past its ttl
+ * while a refresh runs behind it, and `cache` is a fresh one.
+ */
+export type ResponseSource = 'network' | 'cache' | 'stale' | 'dedupe'
 
 export interface ConduitResponse<T = unknown> {
 	readonly status: number
 	readonly headers: Headers
 	readonly data: T
-	/** Absent for anything served from cache, dedupe or a mock. */
+	/** Absent for anything served from cache or dedupe. */
 	readonly raw: Response | undefined
 	readonly from: ResponseSource
 	/** 1 for a first attempt. The retry plugin raises it on each replay. */
@@ -190,68 +331,60 @@ export type SafeResult<T> =
 /*
  *   PIPELINE
  ***************************************************************************************************/
-export type Next = (req: ConduitRequest) => Promise<ConduitResponse>
+export type Next = (request: ConduitRequest) => Promise<ConduitResponse>
 
 /** An onion layer. Return without calling `next` to short-circuit. */
-export type Middleware = (req: ConduitRequest, next: Next) => Promise<ConduitResponse>
+export type Middleware = (request: ConduitRequest, next: Next) => Promise<ConduitResponse>
 
-export interface Plugin<Ext extends object = EmptyExtension> {
+export interface Plugin<Ext extends object = NoExtension> {
 	readonly name: string
-	readonly middleware?: Middleware
+	readonly middleware?: Middleware | undefined
 	/** Merged onto the client by `.with()`, and shows up in its type. */
-	onInit?(ctx: ClientContext): Ext | void
+	onInit?(ctx: PluginContext): Ext | void
 	onDestroy?(): void
-}
-
-/*
- *   LOGGING
- ***************************************************************************************************/
-/** What `ClientConfig.logger` must implement. Defaults to `console`. */
-export interface ConduitLogger {
-	warn(message: string): void
-	error(message: string): void
-}
-
-/** Calls through to `console` fresh on every message, so a test spy still sees it. */
-export const consoleLogger: ConduitLogger = {
-	warn: message => console.warn(message),
-	error: message => console.error(message),
 }
 
 /*
  *   CLIENT
  ***************************************************************************************************/
+export type { ConduitLogger }
+
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 
+export interface RedactConfig {
+	/** Header names hidden from `.response()`, events and devtools. Defaults to `DEFAULT_REDACT.headers`. */
+	headers?: readonly string[] | undefined
+	/** Query parameters whose values are hidden in errors, events and `.response()`. Defaults to `DEFAULT_REDACT.query`. */
+	query?: readonly string[] | undefined
+}
+
 export interface ClientConfig extends RequestInitPassthrough {
-	/** Prefixed to every relative path. Absolute urls bypass it. */
-	baseUrl?: string
+	/**
+	 * Prefixed to every relative path. A relative `baseUrl` (`''`, `'/api'`) means
+	 * the page's own origin and needs a page, so pass an absolute one on a server.
+	 */
+	baseUrl?: string | undefined
 	/** Pass a function for anything that changes at runtime. It is read per request. */
-	headers?: HeadersInit | (() => HeadersInit)
-	credentials?: RequestCredentials
+	headers?: HeadersInit | (() => HeadersInit) | undefined
+	credentials?: RequestCredentials | undefined
 	/** Which headers take part in request identity. Defaults to `'*'`, see {@link Vary}. */
-	vary?: Vary
+	vary?: Vary | undefined
 	/** Names the app or remote issuing requests, in devtools and on errors. */
-	owner?: string
-	lane?: Lane
-	parse?: ParseMode
+	owner?: string | undefined
+	lane?: Lane | undefined
+	parse?: ParseMode | undefined
 	/** Swap the network implementation, for tests, instrumentation or a non-browser host. */
-	fetch?: FetchLike
+	fetch?: FetchLike | undefined
 	/**
-	 * Extra origins this client may call besides its own. `baseUrl`'s origin is
-	 * always allowed; a relative `baseUrl` means the page's own origin. Every
-	 * other absolute request is rejected with `CONFIG` before any plugin runs,
-	 * and a protocol-relative url (`//host/…`) is always rejected.
+	 * Extra origins this client may call besides its own, as `https://host` with no
+	 * path. `baseUrl`'s origin is always allowed. Every other url is rejected with
+	 * `ORIGIN_REJECTED` before any plugin runs.
 	 */
-	origins?: string[]
-	/**
-	 * Header names hidden from `.response()` and from event listeners. The
-	 * plugin pipeline still sees the real request. Defaults to `['authorization',
-	 * 'cookie', 'proxy-authorization']`.
-	 */
-	redact?: string[]
+	origins?: readonly string[] | undefined
+	/** What is hidden from errors, events and `.response()`. Spread `DEFAULT_REDACT` to widen it. */
+	redact?: RedactConfig | undefined
 	/** Where conduit's own diagnostics go. Defaults to `console`. */
-	logger?: ConduitLogger
+	logger?: ConduitLogger | undefined
 }
 
 export interface ResolvedClientConfig {
@@ -270,13 +403,34 @@ export interface ResolvedClientConfig {
 	readonly priority: RequestPriority | undefined
 	readonly referrerPolicy: ReferrerPolicy | undefined
 	readonly integrity: string | undefined
+	/** `origins`, normalised to bare origins. */
 	readonly origins: readonly string[]
-	readonly redact: readonly string[]
+	/** What events and `.response()` hide. Setting `redact` replaces the defaults here. */
+	readonly redact: RedactRules
+	/**
+	 * Header names that count as credentials for the redirect and upload guards:
+	 * the defaults plus anything configured, always. Narrowing `redact` cannot shrink it.
+	 */
+	readonly credentialHeaders: readonly string[]
 	readonly logger: ConduitLogger
 }
 
+/** A change to what the cache holds, for the plugins that mirror it. */
+export type CacheChange =
+	| {
+			readonly type: 'invalidate'
+			/** A key, a `tag:name`, or `*` for everything. */
+			readonly target: string
+	  }
+	| {
+			readonly type: 'set'
+			readonly key: string
+			readonly data: unknown
+			readonly at: number
+	  }
+
 /** What a plugin is handed at install time. */
-export interface ClientContext {
+export interface PluginContext {
 	readonly config: ResolvedClientConfig
 	readonly events: EventBus
 	/** Re-enters the full pipeline from a path. Guard against recursion via `meta`. */
@@ -285,16 +439,20 @@ export interface ClientContext {
 	 * Re-enters the pipeline from the outside with a request that already exists,
 	 * so layers above yours see the response. Mark it or your middleware loops.
 	 */
-	dispatch(request: ConduitRequest): Promise<ConduitResponse>
-	/** Cancels everything in flight, across every scope. */
-	abortAll(reason?: string): void
+	readonly dispatch: Next
+	/** Whether an absolute url sits on the client's own API origin. */
+	isApiOrigin(url: string): boolean
 	/**
 	 * Drops everything held on behalf of whoever was signed in. Identity is
 	 * derived before credentials are attached, so cached responses outlive them.
 	 */
 	resetIdentity(): void
-	/** Registers state to drop when {@link ClientContext.resetIdentity} runs. */
+	/** Registers state to drop when {@link PluginContext.resetIdentity} runs. */
 	onResetIdentity(listener: () => void): Unsubscribe
+	/** Tells the plugins that mirror the cache about a change to it. */
+	notifyCacheChange(change: CacheChange): void
+	/** Registers for {@link PluginContext.notifyCacheChange}. */
+	onCacheChange(listener: (change: CacheChange) => void): Unsubscribe
 }
 
 /*
@@ -309,11 +467,35 @@ export interface ConduitPromise<T> extends Promise<T> {
 }
 
 export interface RequestMethods {
-	request<T = unknown>(path: string, options?: RequestOptions): ConduitPromise<T>
-	get<T = unknown>(path: string, options?: MethodOptions): ConduitPromise<T>
-	head<T = unknown>(path: string, options?: MethodOptions): ConduitPromise<T>
-	delete<T = unknown>(path: string, options?: MethodOptions): ConduitPromise<T>
-	post<T = unknown>(path: string, body?: unknown, options?: MethodOptions): ConduitPromise<T>
-	put<T = unknown>(path: string, body?: unknown, options?: MethodOptions): ConduitPromise<T>
-	patch<T = unknown>(path: string, body?: unknown, options?: MethodOptions): ConduitPromise<T>
+	request<T = unknown, const P extends string = string>(
+		path: P,
+		...args: OptionsArgs<P, RequestOptions>
+	): ConduitPromise<T>
+	get<T = unknown, const P extends string = string>(
+		path: P,
+		...args: OptionsArgs<P, MethodOptions>
+	): ConduitPromise<T>
+	head<T = unknown, const P extends string = string>(
+		path: P,
+		...args: OptionsArgs<P, MethodOptions>
+	): ConduitPromise<T>
+	delete<T = unknown, const P extends string = string>(
+		path: P,
+		...args: OptionsArgs<P, MethodOptions>
+	): ConduitPromise<T>
+	post<T = unknown, const P extends string = string>(
+		path: P,
+		body?: unknown,
+		...args: OptionsArgs<P, MethodOptions>
+	): ConduitPromise<T>
+	put<T = unknown, const P extends string = string>(
+		path: P,
+		body?: unknown,
+		...args: OptionsArgs<P, MethodOptions>
+	): ConduitPromise<T>
+	patch<T = unknown, const P extends string = string>(
+		path: P,
+		body?: unknown,
+		...args: OptionsArgs<P, MethodOptions>
+	): ConduitPromise<T>
 }

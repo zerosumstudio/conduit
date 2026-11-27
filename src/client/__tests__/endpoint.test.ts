@@ -68,7 +68,7 @@ describe('client.call', () => {
 
 		const user = await client.call(getUser, { id: '7' })
 
-		expect(stub.calls[0]?.url).toBe('/api/users/7')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/api/users/7')
 		expect(user).toEqual({ id: '7', name: 'Ada' })
 	})
 
@@ -85,7 +85,7 @@ describe('client.call', () => {
 
 		await client.call(createUser, { name: 'Grace' })
 
-		expect(stub.calls[0]?.url).toBe('/users?notify=true')
+		expect(stub.calls[0]?.url).toBe('http://localhost:3000/users?notify=true')
 		expect(stub.calls[0]?.init.body).toBe('{"name":"Grace"}')
 		expect(stub.calls[0]?.init.method).toBe('POST')
 	})
@@ -98,7 +98,7 @@ describe('client.call', () => {
 			middleware: async (request, next) => next(request),
 		})
 
-		const getUser = defineEndpoint<{ id: string }, unknown>({
+		const getUser = defineEndpoint<{ id: string }>({
 			method: 'GET',
 			path: '/users/:id',
 			tags: vars => [`user:${vars.id}`],
@@ -135,7 +135,7 @@ describe('client.call', () => {
 		await expect(client.call(getUser, undefined)).resolves.toEqual({ id: '1' })
 	})
 
-	it('rejects with SCHEMA and the issues as body when validation fails', async () => {
+	it('rejects with VALIDATION_FAILED and the issues as body when validation fails', async () => {
 		const client = createClient({ fetch: stubFetch(() => jsonResponse({ id: '1' })).fetch })
 
 		const getUser = defineEndpoint<void, { id: string }>({
@@ -146,7 +146,7 @@ describe('client.call', () => {
 
 		const { error } = await client.call(getUser, undefined).safe()
 
-		expect(error?.code).toBe('SCHEMA')
+		expect(error?.code).toBe('VALIDATION_FAILED')
 		expect(error?.body).toEqual([{ message: 'id must be a number' }])
 	})
 
@@ -154,7 +154,7 @@ describe('client.call', () => {
 		const stub = stubFetch(() => jsonResponse({ ok: true }))
 		const client = createClient({ fetch: stub.fetch })
 
-		const getThing = defineEndpoint<void, unknown>({
+		const getThing = defineEndpoint({
 			method: 'GET',
 			path: '/thing',
 			options: { owner: 'endpoint-default' },
@@ -171,7 +171,7 @@ describe('client.call', () => {
 	it('falls back to the endpoint default owner when the caller does not override it', async () => {
 		const client = createClient({ fetch: stubFetch(() => jsonResponse({ ok: true })).fetch })
 
-		const getThing = defineEndpoint<void, unknown>({
+		const getThing = defineEndpoint({
 			method: 'GET',
 			path: '/thing',
 			options: { owner: 'endpoint-default' },
@@ -183,7 +183,7 @@ describe('client.call', () => {
 	})
 })
 
-describe('client.keyFor with an endpoint', () => {
+describe('client.getKey with an endpoint', () => {
 	it('matches the key an equivalent plain request would derive', () => {
 		const client = createClient({ baseUrl: '/api' })
 
@@ -192,8 +192,8 @@ describe('client.keyFor with an endpoint', () => {
 			path: '/users/:id',
 		})
 
-		expect(client.keyFor(getUser, { id: '7' })).toBe(
-			client.keyFor('/users/:id', { method: 'GET', params: { id: '7' } }),
+		expect(client.getKey(getUser, { id: '7' })).toBe(
+			client.getKey('/users/:id', { method: 'GET', params: { id: '7' } }),
 		)
 	})
 })

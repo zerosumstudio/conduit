@@ -27,37 +27,27 @@ export function bodyOptions(
 /*
  *   FACTORY
  ***************************************************************************************************/
-/** Builds the shared verb surface, so a scope offers exactly what the client does. */
+/**
+ * Builds the shared verb surface, so a scope offers exactly what the client does.
+ * The loose signatures here are what the typed `RequestMethods` compiles down to.
+ */
 export function createMethods(execute: Executor): RequestMethods {
-	return {
-		request<T = unknown>(path: string, options?: RequestOptions): ConduitPromise<T> {
-			return execute<T>(path, options ?? {})
-		},
-		get<T = unknown>(path: string, options?: MethodOptions): ConduitPromise<T> {
-			return execute<T>(path, { ...options, method: 'GET' })
-		},
-		head<T = unknown>(path: string, options?: MethodOptions): ConduitPromise<T> {
-			return execute<T>(path, { ...options, method: 'HEAD' })
-		},
-		delete<T = unknown>(path: string, options?: MethodOptions): ConduitPromise<T> {
-			return execute<T>(path, { ...options, method: 'DELETE' })
-		},
-		post<T = unknown>(
-			path: string,
-			body?: unknown,
-			options?: MethodOptions,
-		): ConduitPromise<T> {
-			return execute<T>(path, bodyOptions('POST', body, options))
-		},
-		put<T = unknown>(path: string, body?: unknown, options?: MethodOptions): ConduitPromise<T> {
-			return execute<T>(path, bodyOptions('PUT', body, options))
-		},
-		patch<T = unknown>(
-			path: string,
-			body?: unknown,
-			options?: MethodOptions,
-		): ConduitPromise<T> {
-			return execute<T>(path, bodyOptions('PATCH', body, options))
-		},
+	const methods = {
+		request: <T>(path: string, options?: RequestOptions): ConduitPromise<T> =>
+			execute<T>(path, options ?? {}),
+		get: <T>(path: string, options?: MethodOptions): ConduitPromise<T> =>
+			execute<T>(path, { ...options, method: 'GET' }),
+		head: <T>(path: string, options?: MethodOptions): ConduitPromise<T> =>
+			execute<T>(path, { ...options, method: 'HEAD' }),
+		delete: <T>(path: string, options?: MethodOptions): ConduitPromise<T> =>
+			execute<T>(path, { ...options, method: 'DELETE' }),
+		post: <T>(path: string, body?: unknown, options?: MethodOptions): ConduitPromise<T> =>
+			execute<T>(path, bodyOptions('POST', body, options)),
+		put: <T>(path: string, body?: unknown, options?: MethodOptions): ConduitPromise<T> =>
+			execute<T>(path, bodyOptions('PUT', body, options)),
+		patch: <T>(path: string, body?: unknown, options?: MethodOptions): ConduitPromise<T> =>
+			execute<T>(path, bodyOptions('PATCH', body, options)),
 	}
+
+	return methods
 }

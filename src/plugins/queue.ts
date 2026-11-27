@@ -1,3 +1,4 @@
+import { formatKey } from '../http/redact'
 import { toAbortError } from '../http/abort'
 import { ConduitError } from '../primitives/errors'
 import type { EventBus } from '../primitives/events'
@@ -8,22 +9,21 @@ import type { ConduitRequest, Lane, Middleware, Plugin } from '../primitives/typ
  ***************************************************************************************************/
 export interface QueueConfig {
 	/** How many requests may be in flight at once. Defaults to 6. */
-	concurrency?: number
+	concurrency?: number | undefined
 	/** Lanes in priority order, most urgent first. */
-	lanes?: readonly Lane[]
+	lanes?: readonly Lane[] | undefined
 	/** Per-lane ceilings, so one lane cannot take the whole pool. Minimum 1. */
-	limits?: Readonly<Record<string, number>>
+	limits?: Readonly<Record<string, number>> | undefined
 }
 
 export interface QueueApi {
 	/** Requests waiting for a slot, optionally in one lane. */
-	queueDepth(lane?: Lane): number
+	getQueueDepth(lane?: Lane): number
 	/** Requests currently holding a slot. */
-	activeRequests(): number
+	getActiveCount(): number
 }
 
-/** Skips the queue entirely: `client.get('/x', { meta: { queue: 'bypass' } })`. */
-export const QUEUE_META = 'queue'
+const DEFAULT_CONCURRENCY = 6
 
 const DEFAULT_LANES: readonly Lane[] = ['critical', 'default', 'prefetch']
 
@@ -33,8 +33,8 @@ function assertPositive(what: string, value: number): void {
 	}
 
 	throw new ConduitError({
-		code: 'CONFIG',
-		message: `queue({ ${what}: ${String(value)} }) would never let a request run. It must be a whole number of at least 1. A ceiling of 0 does not disable a lane, it hangs every request on it.`,
+		code: 'INVALID_ARGUMENT',
+		message: `queue({ ${what}: ${String(value)} }) must be a whole number of at least 1.`,
 	})
 }
 
@@ -57,7 +57,7 @@ interface Waiter {
  * connection pool.
  */
 export function queue(config: QueueConfig = {}): Plugin<QueueApi> {
-	const concurrency = config.concurrency ?? 6
+	const concurrency = config.concurrency ?? DEFAULT_CONCURRENCY
 	const lanes = config.lanes ?? DEFAULT_LANES
 	const limits = config.limits ?? {}
 	const priorities = new Map<string, number>(lanes.map((lane, index) => [lane, index]))
@@ -73,20 +73,21 @@ export function queue(config: QueueConfig = {}): Plugin<QueueApi> {
 	let active = 0
 	let events: EventBus | undefined
 
-	const priorityOf = (lane: Lane): number => priorities.get(lane) ?? lanes.length
-	const limitOf = (lane: Lane): number => limits[lane] ?? concurrency
-	const activeIn = (lane: Lane): number => laneActive.get(lane) ?? 0
+	const getPriority = (lane: Lane): number => priorities.get(lane) ?? lanes.length
+	const getLimit = (lane: Lane): number => limits[lane] ?? concurrency
+	const countActive = (lane: Lane): number => laneActive.get(lane) ?? 0
 
-	const canRun = (lane: Lane): boolean => active < concurrency && activeIn(lane) < limitOf(lane)
+	const canRun = (lane: Lane): boolean =>
+		active < concurrency && countActive(lane) < getLimit(lane)
 
 	const acquire = (lane: Lane): void => {
 		active++
-		laneActive.set(lane, activeIn(lane) + 1)
+		laneActive.set(lane, countActive(lane) + 1)
 	}
 
 	const release = (lane: Lane): void => {
 		active--
-		laneActive.set(lane, activeIn(lane) - 1)
+		laneActive.set(lane, countActive(lane) - 1)
 	}
 
 	const pump = (): void => {
@@ -126,7 +127,7 @@ export function queue(config: QueueConfig = {}): Plugin<QueueApi> {
 		new Promise<void>((resolve, reject) => {
 			const waiter: Waiter = {
 				lane: request.lane,
-				priority: priorityOf(request.lane),
+				priority: getPriority(request.lane),
 				resolve,
 				detach: () => {},
 			}
@@ -149,7 +150,7 @@ export function queue(config: QueueConfig = {}): Plugin<QueueApi> {
 		})
 
 	const middleware: Middleware = async (request, next) => {
-		if (request.meta[QUEUE_META] === 'bypass') {
+		if (request.meta.queue === 'bypass') {
 			return next(request)
 		}
 
@@ -163,7 +164,7 @@ export function queue(config: QueueConfig = {}): Plugin<QueueApi> {
 			if (events?.active === true) {
 				events.emit('queue:enqueue', {
 					type: 'queue:enqueue',
-					key: request.key,
+					key: formatKey(request),
 					owner: request.owner,
 					lane: request.lane,
 					depth: waiting.length,
@@ -189,14 +190,14 @@ export function queue(config: QueueConfig = {}): Plugin<QueueApi> {
 			events = ctx.events
 
 			return {
-				queueDepth: (lane?: Lane): number =>
+				getQueueDepth: (lane?: Lane): number =>
 					lane === undefined
 						? waiting.length
 						: waiting.reduce(
 								(count, waiter) => count + (waiter.lane === lane ? 1 : 0),
 								0,
 							),
-				activeRequests: (): number => active,
+				getActiveCount: (): number => active,
 			}
 		},
 		onDestroy: () => {

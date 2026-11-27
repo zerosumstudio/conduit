@@ -4,40 +4,29 @@ import type { ConduitRequest, RequestPatch } from '../primitives/types'
 /*
  *   CREATE
  ***************************************************************************************************/
-export interface RequestRecordInit extends Omit<ConduitRequest, 'headers'> {
+export interface RequestRecordInit extends Omit<ConduitRequest, 'headers' | 'redactUrl'> {
 	/** Called at most once, the first time a middleware actually reads `headers`. */
-	buildHeaders(): Headers
+	buildHeaders: () => Headers
+	/** Defaults to leaving the url as it is. */
+	redactUrl?: ((url: string) => string) | undefined
 }
+
+const keepUrl = (url: string): string => url
 
 /**
  * Materialises the request record every middleware sees. `headers` is a
  * memoised getter, since cache and dedupe answer from `key` alone.
  */
 export function createRequest(init: RequestRecordInit): ConduitRequest {
+	const { buildHeaders, redactUrl, ...fields } = init
 	let headers: Headers | undefined
 
 	return {
-		url: init.url,
-		method: init.method,
-		body: init.body,
-		signal: init.signal,
-		key: init.key,
-		variance: init.variance,
-		lane: init.lane,
-		owner: init.owner,
-		tags: init.tags,
-		parse: init.parse,
-		credentials: init.credentials,
-		mode: init.mode,
-		redirect: init.redirect,
-		cache: init.cache,
-		keepalive: init.keepalive,
-		priority: init.priority,
-		referrerPolicy: init.referrerPolicy,
-		integrity: init.integrity,
-		meta: init.meta,
+		...fields,
+		redactUrl: redactUrl ?? keepUrl,
 		get headers(): Headers {
-			headers ??= init.buildHeaders()
+			headers ??= buildHeaders()
+
 			return headers
 		},
 	}

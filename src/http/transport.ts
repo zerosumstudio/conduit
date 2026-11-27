@@ -1,6 +1,7 @@
 import { toAbortError } from './abort'
-import { stripQuery } from './url'
-import { ConduitError, isConduitError } from '../primitives/errors'
+import type { OriginPolicy } from './origin'
+import { createRequestError } from './redact'
+import { isConduitError, type ConduitError } from '../primitives/errors'
 import type {
 	ConduitRequest,
 	ConduitResponse,
@@ -50,16 +51,28 @@ function resolveMode(response: Response, mode: ParseMode): Exclude<ParseMode, 'a
 	return contentType === '' ? 'text' : 'blob'
 }
 
-/**
- * Reads the body. `tolerant` is for error responses, where a 503 carrying an
- * HTML page under a JSON content type must not become a parse failure and lose
- * the status.
- */
-async function decode(
+async function readAs(
 	response: Response,
-	request: ConduitRequest,
-	tolerant: boolean,
+	mode: Exclude<ParseMode, 'auto' | 'none'>,
 ): Promise<unknown> {
+	switch (mode) {
+		case 'json': {
+			const text = await response.text()
+
+			return text === '' ? null : (JSON.parse(text) as unknown)
+		}
+		case 'text':
+			return response.text()
+		case 'blob':
+			return response.blob()
+		case 'arrayBuffer':
+			return response.arrayBuffer()
+		case 'formData':
+			return response.formData()
+	}
+}
+
+async function decodeBody(response: Response, request: ConduitRequest): Promise<unknown> {
 	const mode = resolveMode(response, request.parse)
 
 	if (mode === 'none') {
@@ -67,60 +80,58 @@ async function decode(
 	}
 
 	try {
-		switch (mode) {
-			case 'json': {
-				const text = await response.text()
-
-				if (text === '') {
-					return null
-				}
-
-				try {
-					return JSON.parse(text) as unknown
-				} catch (cause) {
-					if (tolerant) {
-						return text
-					}
-
-					throw cause
-				}
-			}
-			case 'text':
-				return await response.text()
-			case 'blob':
-				return await response.blob()
-			case 'arrayBuffer':
-				return await response.arrayBuffer()
-			case 'formData':
-				return await response.formData()
-		}
+		return await readAs(response, mode)
 	} catch (cause) {
-		if (tolerant) {
-			return undefined
-		}
-
-		// The signal can abort mid-read.
-		// that is a cancellation, not a body that failed to parse.
+		// The signal can abort mid-read. That is a cancellation, not a body that failed to parse.
 		if (request.signal.aborted) {
 			throw toAbortError(request, cause)
 		}
 
-		throw new ConduitError({
-			code: 'PARSE',
-			message: `${request.method} ${stripQuery(request.url)} returned a body that could not be read as ${mode}.`,
-			method: request.method,
-			url: request.url,
-			owner: request.owner,
-			status: response.status,
-			cause,
-		})
+		throw createRequestError(
+			request,
+			'PARSE_FAILED',
+			`returned a body that is not ${mode}. Set parse to match it.`,
+			{ status: response.status, cause },
+		)
+	}
+}
+
+/**
+ * Reads an error response, where a 503 carrying an HTML page under a JSON content
+ * type must not become a parse failure and lose the status.
+ */
+async function decodeErrorBody(response: Response, request: ConduitRequest): Promise<unknown> {
+	const mode = resolveMode(response, request.parse)
+
+	if (mode === 'none') {
+		return null
+	}
+
+	try {
+		if (mode !== 'json') {
+			return await readAs(response, mode)
+		}
+
+		const text = await response.text()
+
+		if (text === '') {
+			return null
+		}
+
+		try {
+			return JSON.parse(text) as unknown
+		} catch {
+			return text
+		}
+	} catch {
+		return undefined
 	}
 }
 
 /*
  *   FAILURE MAPPING
  ***************************************************************************************************/
-function transportError(cause: unknown, request: ConduitRequest): ConduitError {
+function toTransportError(cause: unknown, request: ConduitRequest): ConduitError {
 	if (isConduitError(cause)) {
 		return cause
 	}
@@ -128,114 +139,165 @@ function transportError(cause: unknown, request: ConduitRequest): ConduitError {
 	const name = cause instanceof Error ? cause.name : ''
 
 	if (name === 'TimeoutError') {
-		return new ConduitError({
-			code: 'TIMEOUT',
-			message: `${request.method} ${stripQuery(request.url)} timed out.`,
-			method: request.method,
-			url: request.url,
-			owner: request.owner,
-			cause,
-		})
+		return createRequestError(request, 'TIMEOUT', 'timed out.', { cause })
 	}
 
 	if (name === 'AbortError' || request.signal.aborted) {
 		return toAbortError(request, cause)
 	}
 
-	return new ConduitError({
-		code: 'NETWORK',
-		message: `${request.method} ${stripQuery(request.url)} never reached a server. The network, DNS, CORS or TLS is at fault, not the response.`,
-		method: request.method,
-		url: request.url,
-		owner: request.owner,
-		cause,
-	})
+	return createRequestError(
+		request,
+		'NETWORK',
+		'never reached a server. Check the network, DNS, CORS and TLS.',
+		{ cause },
+	)
+}
+
+/*
+ *   REDIRECTS
+ ***************************************************************************************************/
+/** Credentials a platform strips itself when a redirect crosses origins. */
+const STRIPPED_HEADERS: ReadonlySet<string> = new Set([
+	'authorization',
+	'cookie',
+	'proxy-authorization',
+])
+
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308])
+
+/** Whether the request holds a credential that a redirect would carry to another origin. */
+function carriesLooseCredential(request: ConduitRequest, config: ResolvedClientConfig): boolean {
+	const names = [...config.credentialHeaders, ...(request.meta.credentialHeaders ?? [])]
+
+	return names.some(name => !STRIPPED_HEADERS.has(name) && request.headers.has(name))
+}
+
+function isBlockedRedirect(response: Response): boolean {
+	return response.type === 'opaqueredirect' || REDIRECT_STATUSES.has(response.status)
+}
+
+/**
+ * Decides how a request treats redirects. A custom credential means `manual`,
+ * unless the caller chose, and XHR cannot do `manual` at all, so it fails closed.
+ */
+function planRedirect(
+	request: ConduitRequest,
+	config: ResolvedClientConfig,
+): { redirect: RequestRedirect | undefined; isGuarded: boolean } {
+	const isCredentialed = carriesLooseCredential(request, config)
+	const canBlock = request.meta.fetch === undefined
+
+	if (!canBlock && request.credentials === 'omit') {
+		throw createRequestError(
+			request,
+			'INVALID_ARGUMENT',
+			"asks for credentials: 'omit', which XMLHttpRequest cannot honour. Drop onProgress or the option.",
+		)
+	}
+
+	if (!canBlock && isCredentialed && request.redirect !== 'follow') {
+		throw createRequestError(
+			request,
+			'INVALID_ARGUMENT',
+			"sends a credential through XMLHttpRequest, which cannot refuse a redirect. Set redirect: 'follow', or drop onProgress.",
+		)
+	}
+
+	const isGuarded = canBlock && isCredentialed && request.redirect === undefined
+
+	return { redirect: isGuarded ? 'manual' : request.redirect, isGuarded }
 }
 
 /*
  *   TRANSPORT
  ***************************************************************************************************/
+/** Request fields that go to fetch under their own names, when the request sets them. */
+const PASSTHROUGH_FIELDS = [
+	'credentials',
+	'mode',
+	'cache',
+	'keepalive',
+	'priority',
+	'referrerPolicy',
+	'integrity',
+] as const
+
+function buildInit(request: ConduitRequest): RequestInit {
+	const init: RequestInit = {
+		method: request.method,
+		headers: request.headers,
+		signal: request.signal,
+	}
+
+	if (request.body !== null) {
+		init.body = request.body
+
+		if (request.body instanceof ReadableStream) {
+			init.duplex = 'half'
+		}
+	}
+
+	for (const field of PASSTHROUGH_FIELDS) {
+		if (request[field] !== undefined) {
+			Object.assign(init, { [field]: request[field] })
+		}
+	}
+
+	return init
+}
+
 /** The terminal handler: everything inside the onion ends here, at the network. */
-export function createFetchTransport(config: ResolvedClientConfig): Next {
+export function createFetchTransport(config: ResolvedClientConfig, policy: OriginPolicy): Next {
 	return async (request: ConduitRequest): Promise<ConduitResponse> => {
-		const init: RequestInit = {
-			method: request.method,
-			headers: request.headers,
-			signal: request.signal,
-		}
+		// The last check, on whatever url the middleware stack ended up with.
+		// What was checked is what is sent, never the string it came from.
+		const target = policy.assertAllowed(request.url)
+		const init = buildInit(request)
+		const send = request.meta.fetch ?? config.fetch
+		const { redirect, isGuarded } = planRedirect(request, config)
 
-		if (request.body !== null) {
-			init.body = request.body
-
-			if (typeof ReadableStream !== 'undefined' && request.body instanceof ReadableStream) {
-				init.duplex = 'half'
-			}
-		}
-
-		if (request.credentials !== undefined) {
-			init.credentials = request.credentials
-		}
-
-		if (request.mode !== undefined) {
-			init.mode = request.mode
-		}
-
-		if (request.redirect !== undefined) {
-			init.redirect = request.redirect
-		}
-
-		if (request.cache !== undefined) {
-			init.cache = request.cache
-		}
-
-		if (request.keepalive !== undefined) {
-			init.keepalive = request.keepalive
-		}
-
-		if (request.priority !== undefined) {
-			init.priority = request.priority
-		}
-
-		if (request.referrerPolicy !== undefined) {
-			init.referrerPolicy = request.referrerPolicy
-		}
-
-		if (request.integrity !== undefined) {
-			init.integrity = request.integrity
+		if (redirect !== undefined) {
+			init.redirect = redirect
 		}
 
 		let response: Response
 
 		try {
-			response = await config.fetch(request.url, init)
+			response = await send(target.href, init)
 		} catch (cause) {
-			throw transportError(cause, request)
+			throw toTransportError(cause, request)
+		}
+
+		if (isGuarded && isBlockedRedirect(response)) {
+			throw createRequestError(
+				request,
+				'REDIRECT_BLOCKED',
+				"was answered with a redirect while carrying a credential. Set redirect: 'follow' on the request if that is intended.",
+				{ status: response.status, headers: response.headers },
+			)
 		}
 
 		if (!response.ok) {
-			throw new ConduitError({
-				code: 'HTTP_ERROR',
-				message:
-					`${request.method} ${stripQuery(request.url)} failed with ${response.status} ${response.statusText}`.trimEnd(),
-				method: request.method,
-				url: request.url,
-				owner: request.owner,
-				status: response.status,
-				headers: response.headers,
-				body: await decode(response, request, true),
-			})
+			throw createRequestError(
+				request,
+				'HTTP_STATUS',
+				`failed with ${response.status} ${response.statusText}`.trimEnd(),
+				{
+					status: response.status,
+					headers: response.headers,
+					body: await decodeErrorBody(response, request),
+				},
+			)
 		}
-
-		const data = await decode(response, request, false)
-		const attempt = request.meta['attempt']
 
 		return {
 			status: response.status,
 			headers: response.headers,
-			data,
+			data: await decodeBody(response, request),
 			raw: response,
 			from: 'network',
-			attempt: typeof attempt === 'number' ? attempt : 1,
+			attempt: request.meta.attempt ?? 1,
 			request,
 		}
 	}

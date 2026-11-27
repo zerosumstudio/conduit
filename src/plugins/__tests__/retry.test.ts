@@ -19,7 +19,7 @@ function flaky(
 	return { fetch: stub.fetch, count: () => calls }
 }
 
-const fast = { baseDelay: 1, jitter: false } as const
+const fast = { baseDelayMs: 1, jitter: false } as const
 
 afterEach(() => {
 	vi.useRealTimers()
@@ -106,7 +106,7 @@ describe('retry', () => {
 	it('stops waiting out a backoff once the request is cancelled', async () => {
 		const client = createClient({
 			fetch: () => Promise.resolve(jsonResponse({}, 503)),
-		}).with(retry({ attempts: 5, baseDelay: 10_000, jitter: false }))
+		}).with(retry({ attempts: 5, baseDelayMs: 10_000, jitter: false }))
 
 		const scope = client.scope('remote:profile')
 		const pending = scope.get('/x').safe()
@@ -133,9 +133,9 @@ describe('retry', () => {
 			},
 		}).with(
 			retry({
-				baseDelay: 60_000,
+				baseDelayMs: 60_000,
 				jitter: false,
-				onRetry: (info: RetryInfo) => delays.push(info.delay),
+				onRetry: (info: RetryInfo) => delays.push(info.delayMs),
 			}),
 		)
 
@@ -150,7 +150,7 @@ describe('retry', () => {
 		const delays: number[] = []
 		const server = flaky(2)
 		const client = createClient({ fetch: server.fetch }).with(
-			retry({ baseDelay: 1, jitter: false, onRetry: info => delays.push(info.delay) }),
+			retry({ baseDelayMs: 1, jitter: false, onRetry: info => delays.push(info.delayMs) }),
 		)
 
 		await client.get('/x')
@@ -163,10 +163,10 @@ describe('retry', () => {
 		const server = flaky(2)
 		const client = createClient({ fetch: server.fetch }).with(
 			retry({
-				baseDelay: 100,
-				maxDelay: 1,
+				baseDelayMs: 100,
+				maxDelayMs: 1,
 				jitter: false,
-				onRetry: info => delays.push(info.delay),
+				onRetry: info => delays.push(info.delayMs),
 			}),
 		)
 
@@ -197,14 +197,14 @@ describe('retry', () => {
 						: jsonResponse({ ok: true }),
 				)
 			},
-		}).with(retry({ ...fast, onRetry: info => delays.push(info.delay) }))
+		}).with(retry({ ...fast, onRetry: info => delays.push(info.delayMs) }))
 
 		await expect(client.get('/x')).resolves.toEqual({ ok: true })
 
 		expect(delays[0]).toBeGreaterThan(0)
 	})
 
-	it('exposes retryAfter on the final error when the header was present', async () => {
+	it('exposes retryAfterMs on the final error when the header was present', async () => {
 		const client = createClient({
 			fetch: () =>
 				Promise.resolve(
@@ -214,16 +214,16 @@ describe('retry', () => {
 
 		const { error } = await client.get('/x').safe()
 
-		expect(error?.retryAfter).toBe(120_000)
+		expect(error?.retryAfterMs).toBe(120_000)
 	})
 
-	it('does not set retryAfter when the header was absent', async () => {
+	it('does not set retryAfterMs when the header was absent', async () => {
 		const server = flaky(5)
 		const client = createClient({ fetch: server.fetch }).with(retry({ ...fast, attempts: 1 }))
 
 		const { error } = await client.get('/x').safe()
 
-		expect(error?.retryAfter).toBeUndefined()
+		expect(error?.retryAfterMs).toBeUndefined()
 	})
 
 	it('never retries a request whose body is a consumed ReadableStream', async () => {

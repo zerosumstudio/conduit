@@ -10,7 +10,7 @@ describe('createStore', () => {
 
 		store.set(2)
 
-		expect(store.get()).toBe(2)
+		expect(store.getState()).toBe(2)
 	})
 
 	it('notifies subscribers', async () => {
@@ -56,7 +56,7 @@ describe('createStore', () => {
 
 		store.update(current => ({ count: current.count + 1 }))
 
-		expect(store.get()).toEqual({ count: 2 })
+		expect(store.getState()).toEqual({ count: 2 })
 	})
 
 	it('stops notifying an unsubscribed listener', async () => {

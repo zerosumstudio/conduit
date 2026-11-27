@@ -1,33 +1,34 @@
 import { ConduitError } from './primitives/errors'
 import type { FetchLike, HttpMethod } from './primitives/types'
 
+export { clearSharedClients } from './client/shared'
+
 /*
  *   REQUEST
  ***************************************************************************************************/
 export interface MockRequest {
 	method: string
-	/** The full URL the client built, query and all. */
+	/** The absolute url the client sent, query and all. */
 	url: string
 	/** Just the path, which is what routes match against. */
 	path: string
 	query: URLSearchParams
 	/** Values captured by `:name` segments in the route pattern. */
 	params: Readonly<Record<string, string>>
+	/** What a real fetch would send, including the `content-type` it derives from the body. */
 	headers: Headers
 	body: BodyInit | null
+	/** Aborts when the client cancels the request, so a responder can stop what it started. */
+	signal: AbortSignal
 	/** The body decoded as JSON, or `undefined` if it was not text. */
+	// The caller names the body type, the way response.json<T>() does.
+	// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 	json<T = unknown>(): T | undefined
 	/** The body as text, or `undefined` if it was not text. */
 	text(): string | undefined
 }
 
-export interface MockCall {
-	method: string
-	url: string
-	path: string
-	headers: Headers
-	body: BodyInit | null
-}
+export type MockCall = Pick<MockRequest, 'method' | 'url' | 'path' | 'headers' | 'body'>
 
 /*
  *   RESPONDERS
@@ -36,6 +37,11 @@ export interface MockCall {
 export type MockValue =
 	| Response
 	| Error
+	| Blob
+	| FormData
+	| URLSearchParams
+	| ArrayBuffer
+	| ReadableStream
 	| Record<string, unknown>
 	| readonly unknown[]
 	| string
@@ -45,8 +51,15 @@ export type MockValue =
 	| undefined
 
 /**
- * A `Response` is used as-is, an `Error` is thrown as a network failure, and
- * anything else is JSON, so the common case is `server.get('/me', { id: 1 })`.
+ * What a route answers with:
+ *
+ * - a `Response` is used as-is
+ * - an `Error` is a network failure
+ * - `undefined` is a 204
+ * - a string, `Blob`, `FormData`, `URLSearchParams`, `ArrayBuffer` or stream is the body of a `new Response()`, so a string is text
+ * - anything else is JSON, so the common case is `server.get('/me', { id: 1 })`
+ *
+ * A function may return any of these, and one that throws answers 500.
  */
 export type MockResponder = ((request: MockRequest) => unknown) | MockValue
 
@@ -80,10 +93,38 @@ export function networkError(message = 'Failed to fetch'): TypeError {
 	return new TypeError(message)
 }
 
+/** A real fetch rejects with the abort reason as it is, which need not be an Error. */
+function rejectWith(reject: (reason?: unknown) => void, reason: unknown): void {
+	reject(reason)
+}
+
+/** Waits, unless the request is cancelled first, and frees its timer when it is. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal.aborted) {
+			rejectWith(reject, signal.reason)
+
+			return
+		}
+
+		const onAbort = (): void => {
+			clearTimeout(timer)
+			rejectWith(reject, signal.reason)
+		}
+
+		const timer = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort)
+			resolve()
+		}, ms)
+
+		signal.addEventListener('abort', onAbort, { once: true })
+	})
+}
+
 /** Wraps a responder so it answers late. Pair it with fake timers. */
 export function delay(ms: number, responder: MockResponder): MockResponder {
 	return async (request: MockRequest): Promise<unknown> => {
-		await new Promise(resolve => setTimeout(resolve, ms))
+		await sleep(ms, request.signal)
 
 		return typeof responder === 'function' ? responder(request) : responder
 	}
@@ -116,14 +157,17 @@ function toMatcher(pattern: string | RegExp): RegExp {
  ***************************************************************************************************/
 export interface MockRouteOptions {
 	/** Retire the route after this many matches. */
-	times?: number
+	times?: number | undefined
 }
 
 export interface MockServerConfig {
-	/** Prefixed to every string pattern, so routes read like the client's paths. */
-	baseUrl?: string
+	/**
+	 * Prefixed to every string pattern, so routes read like the client's paths.
+	 * An absolute one, `https://api.test/v1`, also pins the origin the routes match.
+	 */
+	baseUrl?: string | undefined
 	/** What an unmatched request does. Throwing, the default, fails it where it was made. */
-	onUnmatched?: 'throw' | 'notFound'
+	onUnmatched?: 'throw' | 'notFound' | undefined
 }
 
 export interface MockServer {
@@ -131,6 +175,7 @@ export interface MockServer {
 	readonly fetch: FetchLike
 	/** Every request that arrived, in order. */
 	readonly calls: readonly MockCall[]
+	/** Later routes win, and a route used up by `times` falls through to the earlier ones. */
 	route(
 		method: HttpMethod | '*',
 		pattern: string | RegExp,
@@ -163,84 +208,202 @@ interface Route {
 	remaining: number
 }
 
+/*
+ *   ANSWERING
+ ***************************************************************************************************/
+const RESPONSE_BODIES: ReadonlyArray<abstract new (...args: never[]) => unknown> = [
+	Blob,
+	FormData,
+	URLSearchParams,
+	ArrayBuffer,
+	ReadableStream,
+]
+
+/** Resolves once the answer is ready, or rejects with `signal.reason` the moment the request is cancelled. */
+function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		if (signal.aborted) {
+			rejectWith(reject, signal.reason)
+
+			return
+		}
+
+		const onAbort = (): void => {
+			rejectWith(reject, signal.reason)
+		}
+
+		signal.addEventListener('abort', onAbort, { once: true })
+		promise.then(
+			value => {
+				signal.removeEventListener('abort', onAbort)
+				resolve(value)
+			},
+			(error: unknown) => {
+				signal.removeEventListener('abort', onAbort)
+				rejectWith(reject, error)
+			},
+		)
+	})
+}
+
+function toResponse(result: unknown): Response {
+	if (result instanceof Response) {
+		return result.clone()
+	}
+
+	if (result instanceof Error) {
+		throw result
+	}
+
+	if (result === undefined) {
+		return new Response(null, { status: 204 })
+	}
+
+	if (typeof result === 'string' || RESPONSE_BODIES.some(body => result instanceof body)) {
+		return new Response(result as BodyInit)
+	}
+
+	return json(result)
+}
+
+async function answer(responder: MockResponder, request: MockRequest): Promise<Response> {
+	let result: unknown
+
+	try {
+		result = typeof responder === 'function' ? await responder(request) : responder
+	} catch (error) {
+		// A returned Error is a network failure. A thrown one is the server blowing up.
+		return json(
+			{ message: error instanceof Error ? error.message : String(error) },
+			{ status: 500 },
+		)
+	}
+
+	return toResponse(result)
+}
+
+/*
+ *   FACTORY
+ ***************************************************************************************************/
+function parseBase(baseUrl: string): { origin: string | undefined; prefix: string } {
+	if (URL.canParse(baseUrl)) {
+		const parsed = new URL(baseUrl)
+
+		return { origin: parsed.origin, prefix: parsed.pathname.replace(/\/$/, '') }
+	}
+
+	return { origin: undefined, prefix: baseUrl.replace(/\/$/, '') }
+}
+
 /**
  * A server for tests, without a server. It sits at the transport, so cache,
- * dedupe, retry, the queue and session recovery all run for real.
+ * dedupe, retry, the queue and session recovery all run for real, and it honours
+ * the request's signal the way a real fetch does.
  *
  * ```ts
- * const server = createMockServer({ baseUrl: '/api' })
+ * const server = createMockServer({ baseUrl: 'https://api.test' })
  * server.get('/users/:id', request => ({ id: request.params.id }))
  * server.post('/users', status(201, { id: 2 }))
  *
- * const api = createClient({ baseUrl: '/api', fetch: server.fetch })
+ * const api = createClient({ baseUrl: 'https://api.test', fetch: server.fetch })
  * ```
  */
 export function createMockServer(config: MockServerConfig = {}): MockServer {
-	const baseUrl = config.baseUrl ?? ''
+	const base = parseBase(config.baseUrl ?? '')
 	const unmatched = config.onUnmatched ?? 'throw'
 	const routes: Route[] = []
 	const calls: MockCall[] = []
+
+	/** The last registered route that still has matches left and fits the method and path. */
+	const findRoute = (
+		method: string,
+		path: string,
+	): { route: Route; match: RegExpExecArray } | undefined => {
+		for (let index = routes.length - 1; index >= 0; index--) {
+			const route = routes[index]
+
+			if (route === undefined || route.remaining <= 0) {
+				continue
+			}
+
+			if (route.method !== '*' && route.method !== method) {
+				continue
+			}
+
+			const match = route.matcher.exec(path)
+
+			if (match !== null) {
+				return { route, match }
+			}
+		}
+
+		return undefined
+	}
+
+	const handle = async (url: string, init: RequestInit): Promise<Response> => {
+		// The same object a real fetch builds, so headers, body rules and the signal all match it.
+		const request = new Request(url, init)
+		const parsed = new URL(url)
+		const method = request.method
+		const headers = request.headers
+		const body = init.body ?? null
+		const path = parsed.pathname
+
+		calls.push({ method, url: parsed.href, path, headers, body })
+
+		const route =
+			base.origin !== undefined && parsed.origin !== base.origin
+				? undefined
+				: findRoute(method, path)
+
+		if (route !== undefined) {
+			route.route.remaining--
+
+			return answer(route.route.responder, {
+				method,
+				url: parsed.href,
+				path,
+				query: parsed.searchParams,
+				params: route.match.groups ?? {},
+				headers,
+				body,
+				signal: request.signal,
+				// The caller names the body type, so this is as loose as JSON.parse is.
+				json: () => (typeof body === 'string' ? (JSON.parse(body) as never) : undefined),
+				text: () => (typeof body === 'string' ? body : undefined),
+			})
+		}
+
+		if (unmatched === 'notFound') {
+			return new Response(null, { status: 404 })
+		}
+
+		const registered =
+			routes.length === 0
+				? '(none)'
+				: routes
+						.map(r => r.label)
+						.reverse()
+						.join(', ')
+
+		throw new ConduitError({
+			code: 'INVALID_ARGUMENT',
+			message: `No route for ${method} ${path}. Registered, latest first: ${registered}`,
+			method,
+		})
+	}
 
 	const server: MockServer = {
 		calls,
 
 		fetch: (url, init) => {
-			const mark = url.indexOf('?')
-			const path = mark === -1 ? url : url.slice(0, mark)
-			const method = (init.method ?? 'GET').toUpperCase()
-			const headers = new Headers(init.headers)
-			const body = init.body ?? null
+			const signal = init.signal ?? new AbortController().signal
 
-			calls.push({ method, url, path, headers, body })
-
-			for (const route of routes) {
-				if (route.remaining <= 0) {
-					continue
-				}
-
-				if (route.method !== '*' && route.method !== method) {
-					continue
-				}
-
-				const match = route.matcher.exec(path)
-
-				if (match === null) {
-					continue
-				}
-
-				route.remaining--
-
-				return answer(route.responder, {
-					method,
-					url,
-					path,
-					query: new URLSearchParams(mark === -1 ? '' : url.slice(mark + 1)),
-					params: match.groups ?? {},
-					headers,
-					body,
-					json: <T>() => (typeof body === 'string' ? (JSON.parse(body) as T) : undefined),
-					text: () => (typeof body === 'string' ? body : undefined),
-				})
-			}
-
-			if (unmatched === 'notFound') {
-				return Promise.resolve(new Response(null, { status: 404 }))
-			}
-
-			return Promise.reject(
-				new ConduitError({
-					code: 'CONFIG',
-					message: `No route for ${method} ${path}. Registered: ${
-						routes.length === 0 ? '(none)' : routes.map(route => route.label).join(', ')
-					}`,
-					method,
-					url,
-				}),
-			)
+			return raceSignal(handle(url, init), signal)
 		},
 
 		route: (method, pattern, responder, options = {}) => {
-			const prefixed = typeof pattern === 'string' ? `${baseUrl}${pattern}` : pattern
+			const prefixed = typeof pattern === 'string' ? `${base.prefix}${pattern}` : pattern
 
 			routes.push({
 				method,
@@ -268,21 +431,4 @@ export function createMockServer(config: MockServerConfig = {}): MockServer {
 	}
 
 	return server
-}
-
-/*
- *   ANSWERING
- ***************************************************************************************************/
-async function answer(responder: MockResponder, request: MockRequest): Promise<Response> {
-	const result: unknown = typeof responder === 'function' ? await responder(request) : responder
-
-	if (result instanceof Response) {
-		return result.clone()
-	}
-
-	if (result instanceof Error) {
-		throw result
-	}
-
-	return json(result)
 }

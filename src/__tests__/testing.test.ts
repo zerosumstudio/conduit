@@ -88,8 +88,8 @@ describe('createMockServer', () => {
 		server.get('/flaky', { ok: true })
 
 		const api = defaults(createClient({ fetch: server.fetch }), {
-			cache: { ttl: 0 },
-			retry: { baseDelay: 1, jitter: false },
+			cache: { ttlMs: 0 },
+			retry: { baseDelayMs: 1, jitter: false },
 		})
 
 		await expect(api.get('/flaky')).resolves.toEqual({ ok: true })

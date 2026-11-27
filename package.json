@@ -1,6 +1,6 @@
 {
 	"name": "@zerosumstudio/conduit",
-	"version": "2.0.0",
+	"version": "1.0.0",
 	"description": "A data-fetching client for micro frontends",
 	"keywords": [
 		"micro-frontends",
@@ -27,92 +27,70 @@
 	"type": "module",
 	"exports": {
 		".": {
-			"import": {
-				"types": "./dist/index.d.ts",
-				"default": "./dist/index.js"
-			},
-			"require": {
-				"types": "./dist/index.d.cts",
-				"default": "./dist/index.cjs"
-			}
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
 		},
 		"./react": {
-			"import": {
-				"types": "./dist/react.d.ts",
-				"default": "./dist/react.js"
-			},
-			"require": {
-				"types": "./dist/react.d.cts",
-				"default": "./dist/react.cjs"
-			}
+			"types": "./dist/react.d.ts",
+			"default": "./dist/react.js"
 		},
 		"./devtools": {
-			"import": {
-				"types": "./dist/devtools.d.ts",
-				"default": "./dist/devtools.js"
-			},
-			"require": {
-				"types": "./dist/devtools.d.cts",
-				"default": "./dist/devtools.cjs"
-			}
+			"types": "./dist/devtools.d.ts",
+			"default": "./dist/devtools.js"
 		},
 		"./testing": {
-			"import": {
-				"types": "./dist/testing.d.ts",
-				"default": "./dist/testing.js"
-			},
-			"require": {
-				"types": "./dist/testing.d.cts",
-				"default": "./dist/testing.cjs"
-			}
+			"types": "./dist/testing.d.ts",
+			"default": "./dist/testing.js"
+		},
+		"./upload": {
+			"types": "./dist/upload.d.ts",
+			"default": "./dist/upload.js"
 		},
 		"./package.json": "./package.json"
 	},
-	"main": "./dist/index.cjs",
-	"module": "./dist/index.js",
+	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"files": [
 		"dist",
-		"README.md",
-		"LICENSE"
+		"docs/threat-model.md",
+		"docs/migration-1.0.md"
 	],
 	"scripts": {
-		"bench": "vitest bench --run",
-		"build": "tsup",
-		"check:api": "tsc -p tsconfig.public-api.json --noEmit",
-		"dev": "tsup --watch",
+		"build": "tsdown",
+		"dev": "tsdown --watch",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix",
 		"prepublishOnly": "pnpm run verify",
 		"size": "size-limit",
-		"test": "vitest",
+		"smoke": "node scripts/smoke.mjs",
+		"test": "vitest run",
 		"test:coverage": "vitest run --coverage",
-		"test:run": "vitest run",
-		"type-check": "tsc --noEmit && tsc -p tsconfig.tools.json --noEmit",
-		"verify": "pnpm run type-check && pnpm run lint && pnpm run format:check && pnpm run test:coverage && pnpm run build && pnpm run check:api && pnpm run size"
+		"test:watch": "vitest",
+		"type-check": "tsc --noEmit",
+		"verify": "pnpm run type-check && pnpm run lint && pnpm run format:check && pnpm run test:coverage && pnpm run build && pnpm run size && pnpm run smoke"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@size-limit/preset-small-lib": "^13.0.3",
-		"@testing-library/react": "^16.3.2",
-		"@types/node": "^26.2.0",
-		"@types/react": "^19.2.18",
-		"@types/react-dom": "^19.2.4",
-		"@vitest/coverage-v8": "^4.1.10",
-		"eslint": "^10.8.1",
-		"globals": "^17.9.0",
-		"happy-dom": "^20.11.2",
-		"prettier": "^3.9.6",
-		"react": "^19.2.8",
-		"react-dom": "^19.2.8",
-		"size-limit": "^13.0.3",
-		"terser": "^5.49.2",
-		"tsup": "^8.5.1",
+		"@size-limit/preset-small-lib": "^14.3.0",
+		"@testing-library/react": "^16.3.3",
+		"@types/node": "^26.6.6",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"@vitest/coverage-v8": "^5.1.1",
+		"eslint": "^10.15.0",
+		"eslint-plugin-react-hooks": "^7.1.1",
+		"globals": "^17.14.0",
+		"jsdom": "^31.0.1",
+		"prettier": "^3.10.1",
+		"react": "^19.3.1",
+		"react-dom": "^19.3.1",
+		"size-limit": "^14.3.0",
+		"tsdown": "^0.23.7",
 		"typescript": "^6.0.3",
-		"typescript-eslint": "^8.66.0",
-		"vitest": "^4.1.10"
+		"typescript-eslint": "^8.74.0",
+		"vitest": "^5.1.1"
 	},
 	"peerDependencies": {
 		"react": ">=18.0.0"
@@ -124,7 +102,7 @@
 	},
 	"packageManager": "pnpm@11.6.0",
 	"engines": {
-		"node": ">=22.12.0"
+		"node": ">=26"
 	},
 	"publishConfig": {
 		"access": "public",
@@ -132,42 +110,47 @@
 	},
 	"size-limit": [
 		{
-			"name": "Full bundle",
+			"name": "Main entry (everything)",
 			"path": "dist/index.js",
-			"limit": "12.5 KB"
+			"limit": "13.5 KB"
 		},
 		{
 			"name": "Core only",
 			"path": "dist/index.js",
 			"import": "{ createClient }",
-			"limit": "6.5 KB"
+			"limit": "7.4 KB"
 		},
 		{
 			"name": "Core + common plugins",
 			"path": "dist/index.js",
 			"import": "{ createClient, sharedClient, cache, dedupe, retry, timeout, queue }",
-			"limit": "10 KB"
+			"limit": "10.9 KB"
 		},
 		{
 			"name": "Errors only",
 			"path": "dist/index.js",
 			"import": "{ ConduitError, isConduitError }",
-			"limit": "1 KB"
+			"limit": "0.4 KB"
 		},
 		{
 			"name": "React bindings",
 			"path": "dist/react.js",
-			"limit": "2.5 KB"
+			"limit": "2.4 KB"
 		},
 		{
 			"name": "Devtools",
 			"path": "dist/devtools.js",
-			"limit": "2 KB"
+			"limit": "1.2 KB"
 		},
 		{
 			"name": "Testing",
 			"path": "dist/testing.js",
-			"limit": "2 KB"
+			"limit": "1.8 KB"
+		},
+		{
+			"name": "Upload (progress)",
+			"path": "dist/upload.js",
+			"limit": "0.8 KB"
 		}
 	]
 }

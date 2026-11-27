@@ -10,9 +10,9 @@ describe('defaults', () => {
 	it('installs the stack in the documented order', () => {
 		const api = defaults(createClient({ fetch: stubFetch(ok).fetch }))
 
-		expect(api.cacheSize()).toBe(0)
-		expect(api.inFlight()).toBe(0)
-		expect(api.activeRequests()).toBe(0)
+		expect(api.getCacheSize()).toBe(0)
+		expect(api.getInFlightCount()).toBe(0)
+		expect(api.getActiveCount()).toBe(0)
 	})
 
 	it('caches, so a second read costs nothing', async () => {
@@ -45,7 +45,7 @@ describe('defaults', () => {
 					)
 				},
 			}),
-			{ retry: { baseDelay: 1, jitter: false } },
+			{ retry: { baseDelayMs: 1, jitter: false } },
 		)
 
 		await expect(api.get('/x')).resolves.toEqual({ ok: true })
@@ -74,14 +74,21 @@ describe('defaults', () => {
 		const api = defaults(
 			createClient({ fetch: () => Promise.resolve(jsonResponse({}, 401)) }),
 			{
-				session: { adapter: { load: async () => null }, onUnauthenticated },
-				retry: { baseDelay: 1 },
+				session: {
+					adapter: {
+						load: async () => ({ id: 'u1' }),
+						identify: (user: { id: string }) => user.id,
+					},
+					onUnauthenticated,
+				},
+				retry: { baseDelayMs: 1 },
 			},
 		)
 
+		await api.session.load()
 		await api.get('/x').safe()
 
-		expect(api.session.get().status).toBe('anonymous')
+		expect(api.session.getState().status).toBe('anonymous')
 		expect(onUnauthenticated).toHaveBeenCalledOnce()
 	})
 
@@ -89,7 +96,9 @@ describe('defaults', () => {
 		const load = vi.fn(async () => ({ name: 'Ada' }))
 		const stub = stubFetch(ok)
 		const api = defaults(createClient({ fetch: stub.fetch }), {
-			session: { adapter: { load, authorize: request => request } },
+			session: {
+				adapter: { load, identify: user => user.name, authorize: request => request },
+			},
 		})
 
 		await api.get('/me')

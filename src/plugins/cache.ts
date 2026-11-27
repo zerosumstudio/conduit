@@ -1,8 +1,10 @@
+import { formatKey } from '../http/redact'
 import type { EventBus } from '../primitives/events'
+import { consoleLogger, reportError } from '../primitives/logger'
 import { protect } from '../primitives/freeze'
 import { withRequest } from '../http/request'
 import type {
-	ClientContext,
+	PluginContext,
 	ConduitRequest,
 	ConduitResponse,
 	Middleware,
@@ -12,36 +14,18 @@ import type {
 } from '../primitives/types'
 
 /*
- *   EVENTS
- ***************************************************************************************************/
-declare module '../primitives/events' {
-	interface ConduitEventMap {
-		'cache:set': CacheSetEvent
-	}
-}
-
-export interface CacheSetEvent {
-	readonly type: 'cache:set'
-	readonly key: string
-	readonly data: unknown
-	readonly at: number
-}
-
-/*
  *   CONFIG
  ***************************************************************************************************/
 export interface CacheConfig {
 	/** How long a stored response counts as fresh. Defaults to 30 seconds. */
-	ttl?: number
+	ttlMs?: number | undefined
 	/**
-	 * How long past `ttl` a stale response may still be served while a refresh
-	 * runs behind it. `true` means indefinitely, `false` (the default) not at all.
+	 * How long past `ttlMs` a stale response may still be served while a refresh
+	 * runs behind it. `Infinity` means indefinitely, and the default 0 means never.
 	 */
-	staleWhileRevalidate?: boolean | number
+	staleMs?: number | undefined
 	/** Entry cap. Defaults to 200. The oldest read is evicted first. */
-	max?: number
-	/** Which requests are cacheable. Defaults to `GET` and `HEAD`. */
-	shouldCache?: (request: ConduitRequest) => boolean
+	max?: number | undefined
 }
 
 export interface CacheApi {
@@ -53,7 +37,7 @@ export interface CacheApi {
 	/** Drops every entry carrying a tag. Returns how many went. */
 	invalidateTag(tag: string): number
 	clearCache(): void
-	cacheSize(): number
+	getCacheSize(): number
 	/**
 	 * Writes a value directly, for an optimistic update, without a network
 	 * round trip. Also reaches any mounted `useRequest` watching the same key.
@@ -62,12 +46,8 @@ export interface CacheApi {
 	setData<T = unknown>(key: string, data: T | ((previous: T | undefined) => T)): T | undefined
 }
 
-const CACHEABLE: ReadonlySet<string> = new Set(['GET', 'HEAD'])
-
-const byDefault = (request: ConduitRequest): boolean =>
-	CACHEABLE.has(request.method) || request.tags.length > 0
-
-export const CACHE_META = 'cache'
+const DEFAULT_TTL_MS = 30_000
+const DEFAULT_MAX_ENTRIES = 200
 
 /*
  *   ENTRY
@@ -85,7 +65,14 @@ interface Entry {
 interface PendingRead {
 	readonly key: string
 	readonly tags: readonly string[]
-	suppressed: boolean
+	isSuppressed: boolean
+}
+
+/** What `setData` builds on when nothing is stored under the key yet. */
+const EMPTY_ENTRY: Pick<Entry, 'status' | 'headers' | 'tags'> = {
+	status: 200,
+	headers: new Headers(),
+	tags: [],
 }
 
 /**
@@ -120,17 +107,14 @@ function mergeTags(
 /**
  * A response cache shared by every bundle, so a remote that mounts second reads
  * what the first already fetched. A hit costs a map lookup and nothing else.
+ *
+ * It stores what `request.cacheable` allows, which is `GET` and `HEAD` unless a
+ * request or endpoint says otherwise. Tags only label entries for `invalidateTag`.
  */
 export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
-	const ttl = config.ttl ?? 30_000
-	const max = config.max ?? 200
-	const shouldCache = config.shouldCache ?? byDefault
-	const staleWindow =
-		config.staleWhileRevalidate === true
-			? Number.POSITIVE_INFINITY
-			: config.staleWhileRevalidate === false || config.staleWhileRevalidate === undefined
-				? 0
-				: config.staleWhileRevalidate
+	const ttlMs = config.ttlMs ?? DEFAULT_TTL_MS
+	const max = config.max ?? DEFAULT_MAX_ENTRIES
+	const staleMs = config.staleMs ?? 0
 
 	const entries = new Map<string, Entry>()
 	const revalidating = new Set<string>()
@@ -144,10 +128,10 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 
 	const lifetime = new AbortController()
 	let events: EventBus | undefined
-	let context: ClientContext | undefined
+	let context: PluginContext | undefined
 
 	const begin = (request: ConduitRequest): PendingRead => {
-		const pending: PendingRead = { key: request.key, tags: request.tags, suppressed: false }
+		const pending: PendingRead = { key: request.key, tags: request.tags, isSuppressed: false }
 		inFlight.add(pending)
 
 		return pending
@@ -156,13 +140,19 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 	const suppress = (matches: (pending: PendingRead) => boolean): void => {
 		for (const pending of inFlight) {
 			if (matches(pending)) {
-				pending.suppressed = true
+				pending.isSuppressed = true
 			}
 		}
 	}
 
 	const announce = (target: string, removed: number): number => {
-		if (removed > 0 && events?.active === true) {
+		if (removed === 0) {
+			return removed
+		}
+
+		context?.notifyCacheChange({ type: 'invalidate', target })
+
+		if (events?.active === true) {
 			events.emit('cache:invalidate', {
 				type: 'cache:invalidate',
 				target,
@@ -202,7 +192,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 		response: ConduitResponse,
 		pending: PendingRead,
 	): void => {
-		if (pending.suppressed) {
+		if (pending.isSuppressed) {
 			return
 		}
 
@@ -215,8 +205,8 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 			headers: response.headers,
 			data: response.data,
 			tags: mergeTags(entries.get(request.key)?.tags, request.tags),
-			freshUntil: now + ttl,
-			staleUntil: now + ttl + staleWindow,
+			freshUntil: now + ttlMs,
+			staleUntil: now + ttlMs + staleMs,
 		})
 
 		enforceCap()
@@ -236,7 +226,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 		request,
 	})
 
-	const storable = (response: ConduitResponse): boolean => {
+	const isStorable = (response: ConduitResponse): boolean => {
 		const control = response.headers.get('cache-control')
 
 		return control === null || !/no-store|no-cache/i.test(control)
@@ -251,7 +241,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 
 		const detached = withRequest(request, {
 			signal: lifetime.signal,
-			meta: { ...request.meta, [CACHE_META]: 'bypass' },
+			meta: { ...request.meta, cache: 'bypass' },
 		})
 
 		const pending = begin(detached)
@@ -259,11 +249,17 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 
 		dispatch(detached)
 			.then(response => {
-				if (storable(response)) {
+				if (isStorable(response)) {
 					write(detached, response, pending)
 				}
 			})
-			.catch(() => {})
+			.catch((error: unknown) => {
+				reportError(
+					context?.config.logger ?? consoleLogger,
+					'A background refresh failed.',
+					error,
+				)
+			})
 			.finally(() => {
 				inFlight.delete(pending)
 				revalidating.delete(request.key)
@@ -278,7 +274,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 		try {
 			const response = await next(request)
 
-			if (storable(response)) {
+			if (isStorable(response)) {
 				write(request, response, pending)
 			}
 
@@ -288,10 +284,49 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 		}
 	}
 
-	const middleware: Middleware = async (request, next) => {
-		const mode = request.meta[CACHE_META]
+	/** The stored answer for a request, while it is fresh or may still be served stale. */
+	const serveStored = (
+		entry: Entry,
+		request: ConduitRequest,
+		next: Next,
+		now: number,
+	): ConduitResponse | undefined => {
+		if (now < entry.freshUntil) {
+			if (events?.active === true) {
+				events.emit('cache:hit', {
+					type: 'cache:hit',
+					key: formatKey(request),
+					owner: request.owner,
+					at: now,
+				})
+			}
 
-		if (mode === 'bypass' || !shouldCache(request)) {
+			return serve(entry, request, 'cache')
+		}
+
+		if (now >= entry.staleUntil) {
+			return undefined
+		}
+
+		const hasStarted = refresh(request, next)
+
+		if (events?.active === true) {
+			events.emit('cache:stale', {
+				type: 'cache:stale',
+				key: formatKey(request),
+				owner: request.owner,
+				isRevalidating: hasStarted,
+				at: now,
+			})
+		}
+
+		return serve(entry, request, 'stale')
+	}
+
+	const middleware: Middleware = async (request, next) => {
+		const mode = request.meta.cache
+
+		if (mode === 'bypass' || !request.cacheable) {
 			return next(request)
 		}
 
@@ -299,50 +334,32 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 			return fetchAndStore(request, next)
 		}
 
-		const entry = read(request.key)
 		const now = Date.now()
+		const entry = read(request.key)
+		const stored = entry === undefined ? undefined : serveStored(entry, request, next, now)
 
-		if (entry !== undefined) {
-			if (now < entry.freshUntil) {
-				if (events?.active === true) {
-					events.emit('cache:hit', {
-						type: 'cache:hit',
-						key: request.key,
-						owner: request.owner,
-						at: now,
-					})
-				}
-
-				return serve(entry, request, 'cache')
-			}
-
-			if (now < entry.staleUntil) {
-				const started = refresh(request, next)
-
-				if (events?.active === true) {
-					events.emit('cache:stale', {
-						type: 'cache:stale',
-						key: request.key,
-						owner: request.owner,
-						revalidating: started,
-						at: now,
-					})
-				}
-
-				return serve(entry, request, 'cache')
-			}
+		if (stored !== undefined) {
+			return stored
 		}
 
 		if (events?.active === true) {
 			events.emit('cache:miss', {
 				type: 'cache:miss',
-				key: request.key,
+				key: formatKey(request),
 				owner: request.owner,
 				at: now,
 			})
 		}
 
 		return fetchAndStore(request, next)
+	}
+
+	const clearCache = (): void => {
+		const removed = entries.size
+
+		entries.clear()
+		suppress(() => true)
+		announce('*', removed)
 	}
 
 	let release: (() => void) | undefined
@@ -354,12 +371,7 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 			events = ctx.events
 			context = ctx
 
-			release = ctx.onResetIdentity(() => {
-				const removed = entries.size
-				entries.clear()
-				suppress(() => true)
-				announce('*', removed)
-			})
+			release = ctx.onResetIdentity(clearCache)
 
 			return {
 				invalidate: (key: string): boolean => {
@@ -383,46 +395,39 @@ export function cache(config: CacheConfig = {}): Plugin<CacheApi> {
 					return announce(`tag:${tag}`, removed)
 				},
 
-				clearCache: (): void => {
-					const removed = entries.size
-					entries.clear()
-					suppress(() => true)
-					announce('*', removed)
-				},
+				clearCache,
 
-				cacheSize: (): number => entries.size,
+				getCacheSize: (): number => entries.size,
 
 				setData: <T>(
 					key: string,
 					data: T | ((previous: T | undefined) => T),
 				): T | undefined => {
 					const existing = entries.get(key)
+					const { status, headers, tags } = existing ?? EMPTY_ENTRY
 					const previous = existing?.data as T | undefined
 					const next =
 						typeof data === 'function'
 							? (data as (previous: T | undefined) => T)(previous)
 							: data
+					const now = Date.now()
 
 					protect(next)
 
 					entries.set(key, {
-						status: existing?.status ?? 200,
-						headers: existing?.headers ?? new Headers(),
+						status,
+						headers,
 						data: next,
-						tags: existing?.tags ?? [],
-						freshUntil: Date.now() + ttl,
-						staleUntil: Date.now() + ttl + staleWindow,
+						tags,
+						freshUntil: now + ttlMs,
+						staleUntil: now + ttlMs + staleMs,
 					})
 
 					enforceCap()
+					context?.notifyCacheChange({ type: 'set', key, data: next, at: now })
 
 					if (events?.active === true) {
-						events.emit('cache:set', {
-							type: 'cache:set',
-							key,
-							data: next,
-							at: Date.now(),
-						})
+						events.emit('cache:set', { type: 'cache:set', key, data: next, at: now })
 					}
 
 					return previous
